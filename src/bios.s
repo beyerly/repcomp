@@ -1,4 +1,4 @@
-.org $8000
+ .org $8000
 
 
 PORTB = $6000 ; VIA PORTB
@@ -6,8 +6,8 @@ PORTA = $6001 ; VIA PORTA
 PORTBDDR = $6002 ; VIA PORTB Data Direction
 PORTADDR = $6003 ; VIA PORTA Data Direction
 AUXCTRL = $600B ; VIA Auxilary Control Register
-KEYPRESSED = #$01
-DELAY = #$ff
+KEYPRESSED = $01
+DELAY = $ff
 
 reset:
  lda #$ff
@@ -21,19 +21,19 @@ reset:
 pattern0:
  lda #$55
  sta PORTB ; LED pattern 1
- ldx DELAY
+ ldx #DELAY ; load delay counter
 wait0:
- lda PORTA
- cmp KEYPRESSED
- beq pattern1
- dex
- bne wait0
+ lda PORTA ; read keys
+ cmp #KEYPRESSED ; pressed?
+ beq pattern1 ; witch pattern
+ dex ; decrement delay counter
+ bne wait0 ; repeat untill delay completed
  lda #$aa
  sta PORTB  ; LED pattern 1
- ldx DELAY
+ ldx #DELAY
 wait1:
  lda PORTA
- cmp KEYPRESSED
+ cmp #KEYPRESSED
  beq pattern1
  dex
  bne wait1
@@ -44,19 +44,19 @@ pattern1:
  lda #$FF
  sta PORTB ; LED pattern 1
 
- ldx #$ff
+ ldx #DELAY
 wait2:
  lda PORTA
- cmp KEYPRESSED
+ cmp #KEYPRESSED
  beq pattern0
  dex
  bne wait2
- lda #$aa
+ lda #$00
  sta PORTB  ; LED pattern 1
- ldx DELAY
+ ldx #DELAY
 wait3:
  lda PORTA
- cmp KEYPRESSED
+ cmp #KEYPRESSED
  beq pattern0
  dex
  bne wait3
@@ -64,4 +64,5 @@ wait3:
 
  .org $fffc
  .word reset
+ .word $0
 
