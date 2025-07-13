@@ -161,23 +161,11 @@ led_pattern:
 led_pattern_loop:
  jsr led_out      ; send pattern
  rol A            ; left shift bit
- ldy #$FF         ; delay 255 cycles, twice
+ ldy #$FF         ; delay FFF, lsb
  sty SLEEP_CNTR
- jsr sleep_short
- sty SLEEP_CNTR
- jsr sleep_short
- sty SLEEP_CNTR
- jsr sleep_short
- sty SLEEP_CNTR
- jsr sleep_short
- sty SLEEP_CNTR
- jsr sleep_short
- sty SLEEP_CNTR
- jsr sleep_short
- sty SLEEP_CNTR
- jsr sleep_short
- sty SLEEP_CNTR
- jsr sleep_short
+ ldy #$0F         ; delay FFF, msb
+ sty SLEEP_CNTR + 1
+ jsr sleep
  dex              ; count down
  bne led_pattern_loop ; repeat until shifted 8 times
  pla              ; restore Y
@@ -197,49 +185,22 @@ led_pattern1:
  pha              ; save X
  tya              ; Y - > A
  pha              ; save Y
- ldx #$FF          ; flash 3 times
- lda #$FF         ; All on
+ ldx #$03          ; flash 3 times
 led_pattern1_loop:
  lda #$FF         ; All on
  jsr led_out      ; send pattern
- ldy #$FF         ; delay 255 cycles, twice
+ ldy #$FF         ; delay 2FFF, lsb
  sty SLEEP_CNTR
- jsr sleep_short
- sty SLEEP_CNTR
- jsr sleep_short
- sty SLEEP_CNTR
- jsr sleep_short
- sty SLEEP_CNTR
- jsr sleep_short
- sty SLEEP_CNTR
- jsr sleep_short
- sty SLEEP_CNTR
- jsr sleep_short
- sty SLEEP_CNTR
- jsr sleep_short
- sty SLEEP_CNTR
- jsr sleep_short
+ ldy #$2F         ; delay 2FFF, msb
+ sty SLEEP_CNTR + 1
+ jsr sleep
  lda #$00         ; All on
  jsr led_out      ; send pattern
- ldy #$FF         ; delay 255 cycles, twice
+ ldy #$FF         ; delay 2FFF, lsb
  sty SLEEP_CNTR
- jsr sleep_short
- sty SLEEP_CNTR
- jsr sleep_short
- sty SLEEP_CNTR
- jsr sleep_short
- sty SLEEP_CNTR
- jsr sleep_short
- sty SLEEP_CNTR
- jsr sleep_short
- sty SLEEP_CNTR
- jsr sleep_short
- sty SLEEP_CNTR
- jsr sleep_short
- sty SLEEP_CNTR
- jsr sleep_short
-
-; eor #$FF         ; Toggle
+ ldy #$2F         ; delay 2FFF, msb
+ sty SLEEP_CNTR + 1
+ jsr sleep
  dex              ; count down
  bne led_pattern1_loop ; repeat until done
  pla              ; restore Y
@@ -317,11 +278,6 @@ list_loop:
  tya             ; app size to A
  jsr PRBYTE      ; send total app size on serial
  jsr snd_cr             ; newline
- ldx #<file_loaded_message ; set string pointer to message address
- stx zp_str_ptr
- ldx #>file_loaded_message
- stx zp_str_ptr+1
- jsr snd_str_acia       ; Send message to serial
  jmp kernel             ; done
 
 ;-------------------------------------------------------------------------
@@ -346,6 +302,13 @@ transfer_loop:
   bne transfer_loop ; repeat if not done
   tya               ; Y should contain app size, transfer to A
   jsr led_out       ; show file size on LED for validation.
+  ldx #<file_loaded_message ; set string pointer to message address
+  stx zp_str_ptr
+  ldx #>file_loaded_message
+  stx zp_str_ptr+1
+  jsr snd_str_acia       ; Send message to serial
+  jsr PRBYTE             ; show file size on com
+  jsr snd_cr             ; new line
   jmp kernel_loop   ; done
 
 ;-------------------------------------------------------------------------
@@ -371,13 +334,11 @@ send_char_acia:
  pha              ; save A
  tya              ; Y - > A
  pha              ; save Y
- ldy #$FF         ; delay 255 cycles, 3 times!
+ ldy #$FF         ; delay 3FF cycles lsb
  sty SLEEP_CNTR
- jsr sleep_short
- sty SLEEP_CNTR
- jsr sleep_short
- sty SLEEP_CNTR
- jsr sleep_short
+ ldy #$03         ; delay 3FF cycles msb
+ sty SLEEP_CNTR + 1
+ jsr sleep
  pla              ; restore Y
  tay              ; A -> Y
  pla              ; restore A
@@ -392,14 +353,6 @@ send_char_acia:
 ; lda #$00 ;
 ; sta ACIA_TDRE ; set TDRE to full, will be cleared by IRQ
 
-;-------------------------------------------------------------------------
-;  Sleep $SLEEP_CNTR cycles, up to 255 cycles
-;-------------------------------------------------------------------------
-
-sleep_short:
- dec SLEEP_CNTR
- bne sleep_short
- rts
 
 ;-------------------------------------------------------------------------
 ;  Long Sleep $SLEEP_CNTR cycles, 16b counter
@@ -407,18 +360,25 @@ sleep_short:
 ;  SLEEP_CNT      <- LL
 ;  SLEEP_CNTR + 1 <- HH
 ;
-; needs debug!
 ;-------------------------------------------------------------------------
 
- pha
-sleep_long_loop:
+sleep:
+ pha              ; save A
+ txa              ; X - > A
+ pha              ; save X
+sleep_loop:
  dec SLEEP_CNTR
- bne sleep_long_loop
+ bne sleep_loop
+ lda SLEEP_CNTR + 1
+ beq sleep_done
+ dec SLEEP_CNTR + 1
  lda #$FF
  sta SLEEP_CNTR
- dec SLEEP_CNTR + 1
- bne sleep_long_loop
- pla
+ jmp sleep_loop
+sleep_done:
+ pla              ; restore Y
+ tay              ; A -> Y
+ pla              ; restore X
  rts
 
 ;-------------------------------------------------------------------------
@@ -435,14 +395,14 @@ led_out:
 ;-------------------------------------------------------------------------
 
 wozmon:
- ldx #<wozmon_message ;
- stx zp_str_ptr
- ldx #>wozmon_message
- stx zp_str_ptr+1
- jsr snd_str_acia       ; Send Startup message to serial
- jsr snd_cr             ; newline
- jsr led_pattern1       ;
- ldy #$7F ; Original WozMon expects Y still holds $7F, which will cause an automatic Escape
+                ldx     #<wozmon_message ;
+                stx     zp_str_ptr
+                ldx     #>wozmon_message
+                stx     zp_str_ptr+1
+                jsr     snd_str_acia    ; Send Startup message to serial
+                jsr     snd_cr          ; newline
+                jsr     led_pattern1    ;
+                ldy #   $7F             ; Original WozMon expects Y still holds $7F, which will cause an automatic Escape
 
 ;-------------------------------------------------------------------------
 ; The GETLINE process
@@ -614,13 +574,13 @@ MOD8CHK:
 ;-------------------------------------------------------------------------
 
 PRBYTE:
- pha ; Save A for LSD
- lsr
- lsr
- lsr
- lsr
- jsr PRHEX ; Output hex digit
- pla ; Restore A
+                pha ; Save A for LSD
+                lsr
+                lsr
+                lsr
+                lsr
+                jsr      PRHEX          ; Output hex digit
+                pla                     ; Restore A
 
 ; Fall through to print hex routine
 
@@ -629,14 +589,14 @@ PRBYTE:
 ;-------------------------------------------------------------------------
 
 PRHEX:
- and #$0f  ;    Mask LSD for hex print
- ora #"0" ;             Add "0"
- cmp #"9"+1    ;      Is it a decimal digit?
- bcc PRHEX_ECHO  ;           Yes! output it
- adc #6  ;            Add offset for letter A-F
+                and     #$0f            ; Mask LSD for hex print
+                ora     #"0"            ; Add "0"
+                cmp     #"9"+1          ; Is it a decimal digit?
+                bcc     PRHEX_ECHO      ; Yes! output it
+                adc     #6              ; Add offset for letter A-F
 PRHEX_ECHO:
- jsr send_char_acia
- rts
+                jsr send_char_acia
+                rts
 
 ;-------------------------------------------------------------------------
 ;  Interrupt handler
@@ -670,9 +630,9 @@ acia_irq:
 ;  Messages, Errors
 ;-------------------------------------------------------------------------
 
-startup_message: .asciiz "GRU-10 Computer, v0.1"
+startup_message: .asciiz "GRU-10 Computer, v0.11"
 boot_message: .asciiz "Kernel v0.1, ready..."
-file_loaded_message: .asciiz "File loaded: "
+file_loaded_message: .asciiz "File loaded, size (B): "
 wozmon_message: .asciiz "Starting WozMon"
 load_message: .asciiz "Waiting for file"
 run_message: .asciiz "Running app"
