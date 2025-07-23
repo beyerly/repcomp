@@ -1,3 +1,7 @@
+;-------------------------------------------------------------------------
+;  GRU-10 BIOS v0.127
+;-------------------------------------------------------------------------
+
  .org $8000
 
 ;-------------------------------------------------------------------------
@@ -22,6 +26,8 @@ ACIA_CTRL = $4003
 ;  Zero Page
 ;-------------------
 zp_str_ptr = $00   ; 2B, Pointer to message string
+zp_app_ptr = $02   ; 2B. Pointer to current page beign transferred. L always 0, H is active page.
+
 
 ;-------------------
 ;  WozMon stuff
@@ -64,7 +70,9 @@ IN         = $0200 ; Input buffer, up to $027F
 
 SLEEP_CNTR = $1004 ; 2B, Counter for Sleep subroutine.
 ACIA_TDRE  = $1006  ; 1B, Copy of ACIA Transmit Ready register, for interrupt handler
-APP_SIZE   = $1008   ; 1B, Size of small user application, only 1 page: 256B
+APP_SIZE   = $1008  ; 2B. Size of application in B. LH first.
+APP_CNT    = $100A   ; 2B. Counter tracking how many B if app we've transferred
+
 USER_APP   = $2000   ; Start address for user programms
 
 ;-------------------------------------------------------------------------
@@ -72,26 +80,26 @@ USER_APP   = $2000   ; Start address for user programms
 ;-------------------------------------------------------------------------
 
 reset:
- cld ;  Clear decimal arithmetic mode
- cli ; clear interrupt disable
- ldx #$ff
- txs ; init SP
- lda #$ff
- sta PORTBDDR ; VIA Port B all outputs
- lda #$00
- sta PORTADDR ; VIA Port A all inputs
- lda #00
- sta AUXCTRL ; VIA PORT A latching disabled
+    cld                 ;  Clear decimal arithmetic mode
+    cli                 ; clear interrupt disable
+    ldx #$ff
+    txs                 ; init SP
+    lda #$ff
+    sta PORTBDDR        ; VIA Port B all outputs
+    lda #$00
+    sta PORTADDR        ; VIA Port A all inputs
+    lda #00
+    sta AUXCTRL         ; VIA PORT A latching disabled
 
- lda #$00
- sta ACIA_STATUS ; Reset ACIA
- lda #$1f
- sta ACIA_CTRL ; 1 stop bit, 8b, Baud rate 19200
- lda #$0b
- sta ACIA_CMD ; Odd parity, parity disabled, reveiver normal, Tirq and Rirq disabled, DTR not ready
+    lda #$00
+    sta ACIA_STATUS     ; Reset ACIA
+    lda #$1f
+    sta ACIA_CTRL       ; 1 stop bit, 8b, Baud rate 19200
+    lda #$0b
+    sta ACIA_CMD        ; Odd parity, parity disabled, reveiver normal, Tirq and Rirq disabled, DTR not ready
 
- lda #$01
- sta ACIA_TDRE ; iniit ACIA transmit data register as empty
+    lda #$01
+    sta ACIA_TDRE       ; iniit ACIA transmit data register as empty
 
 ; Fall through to start
 
@@ -100,15 +108,15 @@ reset:
 ;-------------------------------------------------------------------------
 
 start:
- jsr led_pattern ; Flash LED to shwo we're booting
-; Show boot message on serial (and display)
- ldx #<startup_message ;
- stx zp_str_ptr
- ldx #>startup_message
- stx zp_str_ptr+1
- jsr snd_str_acia       ; Send Startup message to serial
- jsr snd_cr             ; newline
- jmp kernel             ; start main kernel loop!
+    jsr led_pattern         ; Flash LED to shwo we're booting
+    ; Show boot message on serial (and display)
+    ldx #<startup_message ;
+    stx zp_str_ptr
+    ldx #>startup_message
+    stx zp_str_ptr+1
+    jsr snd_str_acia        ; Send Startup message to serial
+    jsr snd_cr              ; newline
+    jmp kernel              ; start main kernel loop!
 
 ;-------------------------------------------------------------------------
 ;  Main kernel loop
@@ -116,99 +124,99 @@ start:
 ;-------------------------------------------------------------------------
 
 kernel:
- ldx #<boot_message ;
- stx zp_str_ptr
- ldx #>boot_message
- stx zp_str_ptr+1
- jsr snd_str_acia       ; Send boot message to serial
- jsr snd_cr             ; newline
+    ldx #<boot_message ;
+    stx zp_str_ptr
+    ldx #>boot_message
+    stx zp_str_ptr+1
+    jsr snd_str_acia       ; Send boot message to serial
+    jsr snd_cr             ; newline
 kernel_loop:
- jsr get_acia_char    ; read serial
- cmp #$ff             ; is it a header of an app?
- beq jump_load_app    ; yes, load app
- cmp #$6c             ; 'l'; list program
- beq jump_list_app    ; yes, list app
- cmp #$65             ; 'e'; execute program
- beq jump_exe_app          ; yes, execute app
- cmp #$77             ; 'w'; execute program
- beq jump_wozmon      ; yes, execute wozmon
+    jsr get_acia_char       ; read serial
+    cmp #$ff                ; is it a header of an app?
+    beq jump_load_app       ; yes, load app
+    cmp #$6c                ; 'l'; list program
+    beq jump_list_app       ; yes, list app
+    cmp #$65                ; 'e'; execute program
+    beq jump_exe_app        ; yes, execute app
+    cmp #$77                ; 'w'; execute program
+    beq jump_wozmon         ; yes, execute wozmon
 ; no known command: keep on listening
- jsr led_out ; echo on led
- jsr send_char_acia ; echo to serial
- jmp kernel_loop
-jump_wozmon:          ; Absolute jump because brach is out of range.
- jmp wozmon
-jump_load_app:          ; Absolute jump because brach is out of range.
- jmp load_app
-jump_list_app:          ; Absolute jump because brach is out of range.
- jmp list_app
-jump_exe_app:          ; Absolute jump because brach is out of range.
- jmp exe_app
+    jsr led_out             ; echo on led
+    jsr send_char_acia      ; echo to serial
+    jmp kernel_loop
+jump_wozmon:                ; Absolute jump because brach is out of range.
+    jmp wozmon
+jump_load_app:              ; Absolute jump because brach is out of range.
+    jmp load_app
+jump_list_app:              ; Absolute jump because brach is out of range.
+    jmp list_app
+jump_exe_app:               ; Absolute jump because brach is out of range.
+    jmp exe_app
 
 ;-------------------------------------------------------------------------
 ;  Simple pattern on LEDs on VIA, just for debug.
 ;-------------------------------------------------------------------------
 
 led_pattern:
- pha              ; save A
- txa              ; X - > A
- pha              ; save X
- tya              ; Y - > A
- pha              ; save Y
- ldx #$8          ; shift 8 times
- lda #$1          ; start with right bit
- clc              ;  clear carry
+    pha              ; save A
+    txa              ; X - > A
+    pha              ; save X
+    tya              ; Y - > A
+    pha              ; save Y
+    ldx #$8          ; shift 8 times
+    lda #$1          ; start with right bit
+    clc              ;  clear carry
 led_pattern_loop:
- jsr led_out      ; send pattern
- rol A            ; left shift bit
- ldy #$FF         ; delay FFF, lsb
- sty SLEEP_CNTR
- ldy #$0F         ; delay FFF, msb
- sty SLEEP_CNTR + 1
- jsr sleep
- dex              ; count down
- bne led_pattern_loop ; repeat until shifted 8 times
- pla              ; restore Y
- tay              ; A -> Y
- pla              ; restore X
- tax              ; A -> X
- pla              ; restore A
- rts
+    jsr led_out      ; send pattern
+    rol A            ; left shift bit
+    ldy #$FF         ; delay FFF, lsb
+    sty SLEEP_CNTR
+    ldy #$0F         ; delay FFF, msb
+    sty SLEEP_CNTR + 1
+    jsr sleep
+    dex              ; count down
+    bne led_pattern_loop ; repeat until shifted 8 times
+    pla              ; restore Y
+    tay              ; A -> Y
+    pla              ; restore X
+    tax              ; A -> X
+    pla              ; restore A
+    rts
 
 ;-------------------------------------------------------------------------
 ;  Simple pattern on LEDs on VIA, just for debug.
 ;-------------------------------------------------------------------------
 
 led_pattern1:
- pha              ; save A
- txa              ; X - > A
- pha              ; save X
- tya              ; Y - > A
- pha              ; save Y
- ldx #$03          ; flash 3 times
+    pha              ; save A
+    txa              ; X - > A
+    pha              ; save X
+    tya              ; Y - > A
+    pha              ; save Y
+    ldx #$03          ; flash 3 times
 led_pattern1_loop:
- lda #$FF         ; All on
- jsr led_out      ; send pattern
- ldy #$FF         ; delay 2FFF, lsb
- sty SLEEP_CNTR
- ldy #$2F         ; delay 2FFF, msb
- sty SLEEP_CNTR + 1
- jsr sleep
- lda #$00         ; All on
- jsr led_out      ; send pattern
- ldy #$FF         ; delay 2FFF, lsb
- sty SLEEP_CNTR
- ldy #$2F         ; delay 2FFF, msb
- sty SLEEP_CNTR + 1
- jsr sleep
- dex              ; count down
- bne led_pattern1_loop ; repeat until done
- pla              ; restore Y
- tay              ; A -> Y
- pla              ; restore X
- tax              ; A -> X
- pla              ; restore A
- rts
+    lda #$FF         ; All on
+    jsr led_out      ; send pattern
+    ldy #$FF         ; delay 2FFF, lsb
+    sty SLEEP_CNTR
+    ldy #$2F         ; delay 2FFF, msb
+    sty SLEEP_CNTR + 1
+    jsr sleep
+    lda #$00         ; All on
+    jsr led_out      ; send pattern
+    ldy #$FF         ; delay 2FFF, lsb
+    sty SLEEP_CNTR
+    ldy #$2F         ; delay 2FFF, msb
+    sty SLEEP_CNTR + 1
+    jsr sleep
+    dex              ; count down
+    bne led_pattern1_loop ; repeat until done
+    pla              ; restore Y
+    tay              ; A -> Y
+    pla              ; restore X
+    tax              ; A -> X
+    pla              ; restore A
+    rts
 
 
 ;-------------------------------------------------------------------------
@@ -216,47 +224,47 @@ led_pattern1_loop:
 ;-------------------------------------------------------------------------
 
 snd_cr:
- pha
- lda #LF
- jsr send_char_acia
- lda #CR
- jsr send_char_acia
- pla
- rts
+    pha
+    lda #LF
+    jsr send_char_acia
+    lda #CR
+    jsr send_char_acia
+    pla
+    rts
 
 ;-------------------------------------------------------------------------
 ;  Send 0-terminated string to serial, pointer at by $zp_str_ptr
 ;-------------------------------------------------------------------------
 
 snd_str_acia:
- pha              ; save A
- tya              ; Y - > A
- pha              ; save Y
- ldy #$0          ; address counter
+    pha              ; save A
+    tya              ; Y - > A
+    pha              ; save Y
+    ldy #$0          ; address counter
 snd_str_acia_loop:
- lda (zp_str_ptr), y    ; load character
- beq snd_str_acia_done  ; if 0, end of string, so done
- jsr send_char_acia     ; send current char in A to serial
- iny                    ; next charachter
- jmp snd_str_acia_loop
+    lda (zp_str_ptr), y    ; load character
+    beq snd_str_acia_done  ; if 0, end of string, so done
+    jsr send_char_acia     ; send current char in A to serial
+    iny                    ; next charachter
+    jmp snd_str_acia_loop
 snd_str_acia_done:
- pla              ; restore Y
- tay              ; A -> Y
- pla              ; restore A
- rts
+    pla              ; restore Y
+    tay              ; A -> Y
+    pla              ; restore A
+    rts
 
 ;-------------------------------------------------------------------------
 ;  Execute code at $USER_APP. Only singel page code snippets
 ;-------------------------------------------------------------------------
 
 exe_app:
- ldx #<run_message ;
- stx zp_str_ptr
- ldx #>run_message
- stx zp_str_ptr+1
- jsr snd_str_acia       ; Send Startup message to serial
- jsr snd_cr             ; newline
- jmp $USER_APP ; execute!
+    ldx #<run_message ;
+    stx zp_str_ptr
+    ldx #>run_message
+    stx zp_str_ptr+1
+    jsr snd_str_acia       ; Send Startup message to serial
+    jsr snd_cr             ; newline
+    jmp USER_APP ; execute!
 
 ;-------------------------------------------------------------------------
 ;  Send code at $USER_APP on serial. Only singel page code snippets
@@ -264,50 +272,75 @@ exe_app:
 ;-------------------------------------------------------------------------
 
 list_app:
- ldx APP_SIZE    ; Load app size in bytes, less than 255
- txa 
- jsr led_out
- ldy #$00        ; address counter
+    ldx APP_SIZE    ; Load app size in bytes, less than 255
+    txa
+    jsr led_out
+    ldy #$00        ; address counter
 list_loop:
- lda USER_APP, Y ; read byte
- jsr PRBYTE      ; send char in A to serial, using WozMon.
- iny             ; increment RAM addr
- dex             ; dec file size counter
- bne list_loop   ; repeat if not done
- jsr snd_cr      ; newline
- tya             ; app size to A
- jsr PRBYTE      ; send total app size on serial
- jsr snd_cr             ; newline
- jmp kernel             ; done
+    lda USER_APP, Y ; read byte
+    jsr PRBYTE      ; send char in A to serial, using WozMon.
+    iny             ; increment RAM addr
+    dex             ; dec file size counter
+    bne list_loop   ; repeat if not done
+    jsr snd_cr      ; newline
+    tya             ; app size to A
+    jsr PRBYTE      ; send total app size on serial
+    jsr snd_cr             ; newline
+    jmp kernel             ; done
 
 ;-------------------------------------------------------------------------
 ;  Receive single page code snippet at $USER_APP on serial.
-;  We expect a singel byte X as file size, and then X raw bytes
 ;  Note there's no flow control, so at 19200Baud there's ~521 cpu cycles
 ;  for each incoming cyte. Should be plenty?
 ;  Destructive on A, X, Y but we always return to kernel loop.
 ;-------------------------------------------------------------------------
-
 load_app:
- jsr get_acia_char ; A contains file size. 1B, so less than 256B file!!
- sta APP_SIZE      ; Save app size to memory
- tax               ; File size to X
- ldy #$00          ; Init address counter
-; receive APP_SIZE bytes
+;-------------------------------------------------------------------------
+;  Set up file transfer
+;-------------------------------------------------------------------------
+    jsr get_acia_char    ; Read and ignore sub-command for now
+    lda #<USER_APP       ; Load LB of app start address. Should be 0.
+    sta zp_app_ptr       ; Set LB of app pointer to start address
+    lda #>USER_APP       ; Load HB of app start address. This is page number
+    sta zp_app_ptr + 1   ; Set LB of app pointer to page number
+    jsr get_acia_char   ; Read serial. A contains LB of app size
+    sta APP_SIZE         ; Save LB app size to memory. Permanent for future reference.
+    sta APP_CNT          ; Also save LB to app byte counter, for tracking transfer.
+    jsr get_acia_char   ; Read serial again, A contains HB of app size, number of pages
+    sta APP_SIZE+1       ; Save HB app size to memory. Permanent for future reference.
+    sta APP_CNT+1        ; Also save HB to app byte counter (number of pages), for tracking transfer.
+    ldy #$00             ; Init Y as address counter within a page.
+;-------------------------------------------------------------------------
+;  Main tranfset loop
+;-------------------------------------------------------------------------
 transfer_loop:
-  jsr get_acia_char ; get byte
-  sta USER_APP, Y   ; store at current RAM addr
-  iny               ; increment RAM addr
-  dex               ; dec file size counter
-  bne transfer_loop ; repeat if not done
-  tya               ; Y should contain app size, transfer to A
-  jsr led_out       ; show file size on LED for validation.
+    lda APP_CNT             ; Load LB of app byte counter
+    ora APP_CNT+1           ; Or HB of app byte counter with LB
+    beq load_app_done       ; If 0, HB and LB are 0, so we're done.
+    jsr get_acia_char     ; Not done yet. Read serial
+    sta (zp_app_ptr), Y     ; Store data at current index in page zp_app_ptr + 1
+;  Decrement 16b app counter.
+    sec                     ; Set carry bit. This creates a subtract without borrow.
+    lda APP_CNT             ; Load LB of app byte counter
+    sbc #$01                ; Subtract 1. If negative, carry but is reset, creating borrow.
+    sta APP_CNT             ; Store LB of app counter back to memory
+    lda APP_CNT+1           ; Load HB of app counter (page number)
+    sbc #$00                ; Subtract with borrow. Subtracts 1 if Lb borrowed
+    sta APP_CNT+1           ; Store HB of app counter back to memory
+;  Continue
+    iny                     ; increment addr pointer withing a page.
+    bne transfer_loop       ; If not 0, stay in page, continue loop.
+    inc zp_app_ptr + 1      ; Y wrapped to 0, move to next page.
+    jmp transfer_loop       ; Start at index 0 on next page.
+load_app_done:              ; We are doen with transfer.
   ldx #<file_loaded_message ; set string pointer to message address
   stx zp_str_ptr
   ldx #>file_loaded_message
   stx zp_str_ptr+1
   jsr snd_str_acia       ; Send message to serial
+  lda APP_SIZE
   jsr PRBYTE             ; show file size on com
+  lda APP_SIZE + 1
   jsr snd_cr             ; new line
   jmp kernel_loop   ; done
 
@@ -316,11 +349,11 @@ transfer_loop:
 ;-------------------------------------------------------------------------
 
 get_acia_char:
- lda ACIA_STATUS        ; Check status
- and #$08               ; Receive ready set?
- beq get_acia_char      ; No? check again.
- lda ACIA_DATA          ; We have a char, read from ACIA
- rts
+    lda ACIA_STATUS        ; Check status
+    and #$08               ; Receive ready set?
+    beq get_acia_char      ; No? check again.
+    lda ACIA_DATA          ; We have a char, read from ACIA
+    rts
 
 ;-------------------------------------------------------------------------
 ;  Send byte in A to serial. No interrupts yet, so work-around for ACIA
@@ -330,19 +363,19 @@ get_acia_char:
 ;-------------------------------------------------------------------------
 
 send_char_acia:
- sta ACIA_DATA    ; send char
- pha              ; save A
- tya              ; Y - > A
- pha              ; save Y
- ldy #$FF         ; delay 3FF cycles lsb
- sty SLEEP_CNTR
- ldy #$03         ; delay 3FF cycles msb
- sty SLEEP_CNTR + 1
- jsr sleep
- pla              ; restore Y
- tay              ; A -> Y
- pla              ; restore A
- rts
+    sta ACIA_DATA    ; send char
+    pha              ; save A
+    tya              ; Y - > A
+    pha              ; save Y
+    ldy #$FF         ; delay 3FF cycles lsb
+    sty SLEEP_CNTR
+    ldy #$03         ; delay 3FF cycles msb
+    sty SLEEP_CNTR + 1
+    jsr sleep
+    pla              ; restore Y
+    tay              ; A -> Y
+    pla              ; restore A
+    rts
 
  ; interrupt mode, tbd
  ; tx irq check, disable for now
@@ -363,31 +396,31 @@ send_char_acia:
 ;-------------------------------------------------------------------------
 
 sleep:
- pha              ; save A
- txa              ; X - > A
- pha              ; save X
+    pha                 ; save A
+    txa                 ; X - > A
+    pha                 ; save X
 sleep_loop:
- dec SLEEP_CNTR
- bne sleep_loop
- lda SLEEP_CNTR + 1
- beq sleep_done
- dec SLEEP_CNTR + 1
- lda #$FF
- sta SLEEP_CNTR
- jmp sleep_loop
+    dec SLEEP_CNTR      ; Decrement LB
+    bne sleep_loop      ; Repeat if not 0
+    lda SLEEP_CNTR + 1  ; LH is 0, load HB
+    beq sleep_done      ; If 0, we're done
+    dec SLEEP_CNTR + 1  ; Not 0, decrement HB
+    lda #$FF            ; Reload LB for full page
+    sta SLEEP_CNTR
+    jmp sleep_loop      ; Repeat
 sleep_done:
- pla              ; restore Y
- tay              ; A -> Y
- pla              ; restore X
- rts
+    pla                 ; restore Y
+    tay                 ; A -> Y
+    pla                 ; restore X
+    rts
 
 ;-------------------------------------------------------------------------
 ;  Output A on 8b led strip
 ;-------------------------------------------------------------------------
 
 led_out:
- sta PORTB
- rts
+    sta PORTB
+    rts
 
 ;-------------------------------------------------------------------------
 ; WozMon
@@ -630,7 +663,7 @@ acia_irq:
 ;  Messages, Errors
 ;-------------------------------------------------------------------------
 
-startup_message: .asciiz "GRU-10 Computer, v0.11"
+startup_message: .asciiz "GRU-10 Computer, v0.125"
 boot_message: .asciiz "Kernel v0.1, ready..."
 file_loaded_message: .asciiz "File loaded, size (B): "
 wozmon_message: .asciiz "Starting WozMon"
