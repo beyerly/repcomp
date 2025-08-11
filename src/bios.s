@@ -1,5 +1,5 @@
 ;-------------------------------------------------------------------------
-;  GRU-10 BIOS v0.126
+;  GRU-10 BIOS v0.127
 ;-------------------------------------------------------------------------
 
  .org $8000
@@ -1400,7 +1400,7 @@ acia_irq:
 ;  Messages, Errors
 ;-------------------------------------------------------------------------
 
-startup_message: .asciiz "GRU-10 Computer, v0.126"
+startup_message: .asciiz "GRU-10 Computer, v0.127"
 boot_message: .asciiz "Kernel v0.1, ready..."
 file_loaded_message: .asciiz "File loaded, size (B): "
 wozmon_message: .asciiz "Starting WozMon"
