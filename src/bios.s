@@ -1,5 +1,5 @@
 ;-------------------------------------------------------------------------
-;  GRU-10 BIOS v0.127
+;  GRU-10 BIOS v0.126
 ;-------------------------------------------------------------------------
 
  .org $8000
@@ -12,7 +12,11 @@ PORTB = $6000    ; VIA PORTB
 PORTA = $6001    ; VIA PORTA
 PORTBDDR = $6002 ; VIA PORTB Data Direction
 PORTADDR = $6003 ; VIA PORTA Data Direction
+PORTAPCR = $600C ; VIA PORTA PCR register
+PORTAIFR = $600D ; VIA PORTA IFR register
+PORTAIER = $600E ; VIA PORTA IRR register
 AUXCTRL = $600B  ; VIA Auxilary Control Register
+
 ACIA_DATA = $4000
 ACIA_STATUS = $4001
 ACIA_CMD = $4002
@@ -72,8 +76,162 @@ SLEEP_CNTR = $1004 ; 2B, Counter for Sleep subroutine.
 ACIA_TDRE  = $1006  ; 1B, Copy of ACIA Transmit Ready register, for interrupt handler
 APP_SIZE   = $1008  ; 2B. Size of application in B. LH first.
 APP_CNT    = $100A   ; 2B. Counter tracking how many B if app we've transferred
+DISPLAY_CTRL = $100C  ; 1B. Display control. b0 = echo on display.
+DISPLAY_CHAR_HT = $100D  ; 1B. For text mode, character height in pixels. Used for CR.
 
 USER_APP   = $2000   ; Start address for user programms
+
+;-------------------------------------------------------------------------
+;  RA8889 LCD display;
+;-------------------------------------------------------------------------
+
+RA8889_CMD = $4400
+RA8889_DAT = $4401
+
+RA8889_SSR = $00
+RA8889_CCR = $01
+RA8889_MACR = $02
+RA8889_ICR = $03
+RA8889_MRWDP = $04
+
+; PLLs
+RA8889_MPLLC1 = $07
+RA8889_MPLLC2 = $08
+
+; Clocks
+RA8889_SPLLC1 = $09
+RA8889_SPLLC2 = $0A
+RA8889_PPLLC1 = $05
+RA8889_PPLLC2 = $06
+
+; Display SDRAM
+RA8889_SDRAR = $E0
+RA8889_SDRMD = $E1
+RA8889_SDR_REF_ITVL0 = $E2
+RA8889_SDR_REF_ITVL1 = $E3
+RA8889_SDRCR = $E4
+
+RA8889_DPCR = $12
+RA8889_PCSR = $13
+RA8889_HDWR = $14
+RA8889_HDWFTR = $15
+RA8889_VDHR0 = $1A
+RA8889_VDHR1 = $1B
+
+RA8889_MPWCTR = $10
+RA8889_AW_COLOR = $5E
+
+RA8889_HNDR = $16
+RA8889_HNDFTR = $17
+RA8889_HSTR = $18
+RA8889_HPWR = $19
+
+RA8889_VNDR0 = $1C
+RA8889_VNDR1 = $1D
+RA8889_VSTR = $1E
+RA8889_VPWR = $1F
+
+RA8889_MISA0 = $20
+RA8889_MISA1 = $21
+RA8889_MISA2 = $22
+RA8889_MISA3 = $23
+
+RA8889_MIW0 = $24
+RA8889_MIW1 = $25
+
+RA8889_MWULX0 = $26
+RA8889_MWULX1 = $27
+RA8889_MWULX2 = $28
+RA8889_MWULX3 = $29
+
+RA8889_CVS_IMWTH0 = $54
+RA8889_CVS_IMWTH1 = $55
+
+RA8889_AWUL_X0 = $56
+RA8889_AWUL_X1 = $57
+RA8889_AWUL_Y0 = $58
+RA8889_AWUL_Y1 = $59
+
+RA8889_AW_WTH0 = $5A
+RA8889_AW_WTH1 = $5B
+RA8889_AW_HT0 = $5C
+RA8889_AW_HT1 = $5D
+
+RA8889_F_CURX0 = $63
+RA8889_F_CURX1 = $64
+RA8889_F_CURY0 = $65
+RA8889_F_CURY1 = $66
+
+RA8889_FGCR = $D2
+RA8889_FGCG = $D3
+RA8889_FGCB = $D4
+RA8889_BGCR = $D5
+RA8889_BGCG = $D6
+RA8889_BGCB = $D7
+
+RA8889_DCR1 = $76
+RA8889_GTCCR = $3C
+RA8889_BTCR = $3D
+
+
+RA8889_BTE_CTRL0 = $90
+RA8889_BTE_CTRL1 = $91
+RA8889_BTE_WTH0 = $B1
+RA8889_BTE_WTH1 = $B2
+RA8889_BTE_HIG0 = $B3
+RA8889_BTE_HIG1 = $B4
+
+RA8889_DT_WTH0 = $AB
+RA8889_DT_WTH1 = $AC
+
+
+RA8889_SSR_DEFAULT = $02
+
+;-------------------------------------------------------------------------
+;  RA8889 Values for 1024x600 LCD display, see
+;-------------------------------------------------------------------------
+
+RA8889_1024x600_HDWR  = $7F
+RA8889_1024x600_HDWFTR = $00
+RA8889_1024x600_VDHR0 = $57
+RA8889_1024x600_VDHR1 = $02
+RA8889_1024x600_MIW0 = $00
+RA8889_1024x600_MIW1 = $04
+RA8889_1024x600_HNDR = $02
+RA8889_1024x600_HNDFTR = $06
+RA8889_1024x600_HSTR = $19
+RA8889_1024x600_HPWR = $01
+RA8889_1024x600_VNDR0 = $0C
+RA8889_1024x600_VNDR1 = $00
+RA8889_1024x600_VSTR = $15
+RA8889_1024x600_VPWR = $09
+RA8889_1024x600_CVS_IMWTH0 = $00
+RA8889_1024x600_CVS_IMWTH1 = $04
+RA8889_1024x600_AW_WTH0 = $00
+RA8889_1024x600_AW_WTH1 = $04
+RA8889_1024x600_AW_HT0 = $58
+RA8889_1024x600_AW_HT1 = $02
+
+DEFAULT_CHAR_HEIGHT = $15
+
+SET_BIT_0 = $01
+SET_BIT_1 = $02
+SET_BIT_2 = $04
+SET_BIT_3 = $08
+SET_BIT_4 = $10
+SET_BIT_5 = $20
+SET_BIT_6 = $40
+SET_BIT_7 = $80
+
+CLEAR_BIT_0 = $FE
+CLEAR_BIT_1 = $FD
+CLEAR_BIT_2 = $FB
+CLEAR_BIT_3 = $F7
+CLEAR_BIT_4 = $EF
+CLEAR_BIT_5 = $DF
+CLEAR_BIT_6 = $BF
+CLEAR_BIT_7 = $7F
+
 
 ;-------------------------------------------------------------------------
 ;  Reset Vector
@@ -90,6 +248,10 @@ reset:
     sta PORTADDR        ; VIA Port A all inputs
     lda #00
     sta AUXCTRL         ; VIA PORT A latching disabled
+    lda #01
+    sta PORTAPCR        ; VIA PORT A CA1 to pos edge input from keyboard controller
+    lda #82
+    sta PORTAIER        ; Enable VIA CA1 interrupt for keyboard
 
     lda #$00
     sta ACIA_STATUS     ; Reset ACIA
@@ -100,6 +262,20 @@ reset:
 
     lda #$01
     sta ACIA_TDRE       ; iniit ACIA transmit data register as empty
+
+    jsr display_init    ; Initialize LCD display
+    jsr display_set_text_mode
+    jsr display_blinking_cursor_on
+    jsr display_on
+    jsr clear_screen
+    jsr display_set_fg_color_white
+    jsr display_set_bg_color_black
+    
+    lda #$01
+    sta DISPLAY_CTRL
+    lda #DEFAULT_CHAR_HEIGHT
+    sta DISPLAY_CHAR_HT
+
 
 ; Fall through to start
 
@@ -114,7 +290,7 @@ start:
     stx zp_str_ptr
     ldx #>startup_message
     stx zp_str_ptr+1
-    jsr snd_str_acia        ; Send Startup message to serial
+    jsr snd_str             ; Send Startup message to serial
     jsr snd_cr              ; newline
     jmp kernel              ; start main kernel loop!
 
@@ -128,7 +304,7 @@ kernel:
     stx zp_str_ptr
     ldx #>boot_message
     stx zp_str_ptr+1
-    jsr snd_str_acia       ; Send boot message to serial
+    jsr snd_str            ; Send boot message to serial
     jsr snd_cr             ; newline
 kernel_loop:
     jsr get_acia_char       ; read serial
@@ -142,7 +318,7 @@ kernel_loop:
     beq jump_wozmon         ; yes, execute wozmon
 ; no known command: keep on listening
     jsr led_out             ; echo on led
-    jsr send_char_acia      ; echo to serial
+    jsr send_char           ; echo
     jmp kernel_loop
 jump_wozmon:                ; Absolute jump because brach is out of range.
     jmp wozmon
@@ -219,17 +395,27 @@ led_pattern1_loop:
     rts
 
 
+snd_str:
+    jsr snd_str_display
+    jsr snd_str_acia
+    rts
+
 ;-------------------------------------------------------------------------
-;  Send CR to serial
+;  Send CR to serial and display
 ;-------------------------------------------------------------------------
 
 snd_cr:
     pha
-    lda #LF
-    jsr send_char_acia
-    lda #CR
-    jsr send_char_acia
+    jsr snd_cr_display
+    jsr snd_cr_acia
     pla
+    rts
+
+snd_cr_acia:
+    lda #LF                 ; Send linefeed
+    jsr send_char_acia
+    lda #CR                 ; Send carriage return
+    jsr send_char_acia
     rts
 
 ;-------------------------------------------------------------------------
@@ -262,7 +448,7 @@ exe_app:
     stx zp_str_ptr
     ldx #>run_message
     stx zp_str_ptr+1
-    jsr snd_str_acia       ; Send Startup message to serial
+    jsr snd_str            ; Send Startup message to serial
     jsr snd_cr             ; newline
     jmp USER_APP ; execute!
 
@@ -337,7 +523,7 @@ load_app_done:              ; We are doen with transfer.
   stx zp_str_ptr
   ldx #>file_loaded_message
   stx zp_str_ptr+1
-  jsr snd_str_acia       ; Send message to serial
+  jsr snd_str            ; Send message to serial
   lda APP_SIZE
   jsr PRBYTE             ; show file size on com
   lda APP_SIZE + 1
@@ -351,8 +537,35 @@ load_app_done:              ; We are doen with transfer.
 get_acia_char:
     lda ACIA_STATUS        ; Check status
     and #$08               ; Receive ready set?
-    beq get_acia_char      ; No? check again.
+    bne load_acia_char     ; Yes! Read from ACIA
+    lda PORTAIFR           ; Check VIA status for CA1 interrupt (polling)
+    and #$02               ; Receive ready set?
+    bne load_kb_char       ; Yes! Read from ACIA
+    jmp get_acia_char      ; Neither, check again (blocking!!)
+load_acia_char:
     lda ACIA_DATA          ; We have a char, read from ACIA
+    rts
+load_kb_char:
+    lda PORTA              ; We have a char, read from VIA PORT A
+    rts
+
+;get_acia_char:
+;    lda ACIA_STATUS        ; Check status
+;    and #$08               ; Receive ready set?
+;    beq get_acia_char      ; No? check again.
+;    lda ACIA_DATA          ; We have a char, read from ACIA
+;    rts
+
+
+
+;-------------------------------------------------------------------------
+; Send byte in A to display and serial.
+; Note serial is slow, so perhaps keep serial enable bit and skip if not needed
+;-------------------------------------------------------------------------
+
+send_char:
+    jsr send_char_display
+    jsr send_char_acia
     rts
 
 ;-------------------------------------------------------------------------
@@ -375,6 +588,34 @@ send_char_acia:
     pla              ; restore Y
     tay              ; A -> Y
     pla              ; restore A
+    rts
+
+;-------------------------------------------------------------------------
+; Send byte in A to display. Assuming display is in text mode.
+; RA8889 will wrap arournd lines, but no scroll implemented yet.
+;-------------------------------------------------------------------------
+
+send_char_display:
+    pha                ; save character to send
+    ; if cr, send CR!!
+    cmp     #CR
+    beq send_char_display_snd_cr          ; It's  CR!
+    ; if lf, send CR!!
+    cmp     #LF
+    beq send_char_display_snd_cr          ; It's  LF!
+send_char_display_not_cr:
+    lda DISPLAY_CTRL
+    and #$01
+    beq send_char_display_done
+    lda #RA8889_MRWDP  ; Select RA8889 memory write port
+    sta RA8889_CMD     ; Set RA8889 register to MRWDP
+    pla                ; restore char
+    sta RA8889_DAT     ; send char
+    rts
+send_char_display_snd_cr:
+    jsr snd_cr_display
+send_char_display_done:
+    pla
     rts
 
  ; interrupt mode, tbd
@@ -432,7 +673,7 @@ wozmon:
                 stx     zp_str_ptr
                 ldx     #>wozmon_message
                 stx     zp_str_ptr+1
-                jsr     snd_str_acia    ; Send Startup message to serial
+                jsr     snd_str         ; Send Startup message to serial
                 jsr     snd_cr          ; newline
                 jsr     led_pattern1    ;
                 ldy #   $7F             ; Original WozMon expects Y still holds $7F, which will cause an automatic Escape
@@ -451,7 +692,7 @@ NOTCR:
 
 ESCAPE:
                 lda     #PROMPT        ; Print prompt character
-                jsr     send_char_acia ; Output it.
+                jsr     send_char      ; Output it.
 
 GETLINE:        
                 jsr     snd_cr         ; Send CR
@@ -465,7 +706,7 @@ NEXTCHAR:
                 jsr     get_acia_char  ; Wait for key press, note WozMon expects B7=1, and we don;t have that
                 jsr     led_out
                 sta     IN,Y           ; Add to text buffer
-                jsr     send_char_acia ; Display character
+                jsr     send_char      ; Display character
                 cmp     #CR
                 bne     NOTCR          ; It's not CR!
 
@@ -577,11 +818,11 @@ NXTPRNT:
                 lda     XAML           ; Output low-order byte of address
                 jsr     PRBYTE
                 lda     #":"           ; Print colon
-                jsr     send_char_acia
+                jsr     send_char
 
 PRDATA:
 		lda     #" "           ; Print space
-                jsr     send_char_acia
+                jsr     send_char
                 lda     (XAML,X)       ; Get data from address (X=0)
 		jsr     led_out
                 jsr     PRBYTE         ; Output it in hex format
@@ -628,8 +869,504 @@ PRHEX:
                 bcc     PRHEX_ECHO      ; Yes! output it
                 adc     #6              ; Add offset for letter A-F
 PRHEX_ECHO:
-                jsr send_char_acia
+                jsr send_char
                 rts
+
+
+;-------------------------------------------------------------------------
+;  RA8889 LCD display;
+;-------------------------------------------------------------------------
+
+
+;-------------------------------------------------------------------------
+;  Display not connected, message on serial and start WozMon
+;-------------------------------------------------------------------------
+
+no_display:
+    ldx #<dsp_err_msg ;
+    stx zp_str_ptr
+    ldx #>dsp_err_msg
+    stx zp_str_ptr+1
+    jsr snd_str_acia        ; Send Startup message to serial
+    jsr snd_cr_acia         ; newline
+
+    jmp wozmon
+
+;-------------------------------------------------------------------------
+;  RA8889 LCD display controller initialization
+;-------------------------------------------------------------------------
+
+display_init:
+    lda #RA8889_SSR
+    sta RA8889_CMD          ; set SSR
+    lda RA8889_DAT          ; read SSR
+    cmp #RA8889_SSR_DEFAULT
+    bne no_display          ; no display found
+
+    lda RA8889_DAT          ; read SSR
+    ora #SET_BIT_0
+    sta RA8889_DAT          ; SW reset
+
+;  PLLs Dram clock
+    lda #RA8889_MPLLC1
+    sta RA8889_CMD
+    lda #$02 ; div by 2
+    sta RA8889_DAT
+    lda #RA8889_MPLLC2
+    sta RA8889_CMD
+    lda #$19 ;
+    sta RA8889_DAT
+
+; PLLs Core clock
+    lda #RA8889_SPLLC1
+    sta RA8889_CMD
+    lda #$04 ; div by 4
+    sta RA8889_DAT
+    lda #RA8889_SPLLC2
+    sta RA8889_CMD
+    lda #$2F ;
+    sta RA8889_DAT
+
+; PLLs Pixel clock
+    lda #RA8889_PPLLC1
+    sta RA8889_CMD
+    lda #$06 ; div by 8
+    sta RA8889_DAT
+    lda #RA8889_PPLLC2
+    sta RA8889_CMD
+    lda #$27 ;
+    sta RA8889_DAT
+
+; Enable PLLs
+    lda #RA8889_CCR
+    sta RA8889_CMD
+    lda #SET_BIT_7 ; reconfig pll
+    sta RA8889_DAT
+display_check_plls:
+    lda RA8889_DAT ; check CCR
+    and #SET_BIT_7
+    beq display_check_plls ; bit7 not set yet, wait until PLL reconfig is done
+
+; Set display SDRAM
+    lda #RA8889_SDRAR
+    sta RA8889_CMD
+    lda #$29 ;
+    sta RA8889_DAT
+    lda #RA8889_SDRMD
+    sta RA8889_CMD
+    lda #$03 ; cas latency
+    sta RA8889_DAT
+    lda #RA8889_SDR_REF_ITVL0
+    sta RA8889_CMD
+    lda #$1D ;
+    sta RA8889_DAT
+    lda #RA8889_SDR_REF_ITVL1
+    sta RA8889_CMD
+    lda #$08 ;
+    sta RA8889_DAT
+
+; Init srdam
+    lda #RA8889_SDRCR
+    sta RA8889_CMD
+    lda RA8889_DAT
+    ora #SET_BIT_0 ; sdr_initdone
+    sta RA8889_DAT
+display_check_sdram:
+    lda RA8889_CMD ; check STSR
+    and #SET_BIT_2
+    beq display_check_sdram ; bit2 not set yet, wait until SDRAM is ready for access
+
+; Set Color Output
+    lda #RA8889_CCR
+    sta RA8889_CMD
+    lda #$00 ; tft 24bit
+    sta RA8889_DAT
+
+; Main window
+    lda #RA8889_MPWCTR
+    sta RA8889_CMD
+    lda #$04 ; 16b Main Image Color Depth Setting (conflicts with tft 24bit?)
+    sta RA8889_DAT
+
+    lda #RA8889_AW_COLOR
+    sta RA8889_CMD
+    lda #$01 ; 16b Canvas image’s color depth & memory R/W data widt (conflicts with tft 24bit?)
+    sta RA8889_DAT
+
+    lda #RA8889_DPCR
+    sta RA8889_CMD
+    lda RA8889_DAT
+    ora #SET_BIT_7 ; Panel fetches XPDAT at PCLK falling edge.
+    sta RA8889_DAT
+
+
+; LCD_HorizontalWidth_VerticalHeight
+    lda #RA8889_HDWR
+    sta RA8889_CMD
+    lda #RA8889_1024x600_HDWR
+    sta RA8889_DAT
+
+    lda #RA8889_HDWFTR
+    sta RA8889_CMD
+    lda #RA8889_1024x600_HDWFTR
+    sta RA8889_DAT
+
+    lda #RA8889_VDHR0
+    sta RA8889_CMD
+    lda #RA8889_1024x600_VDHR0
+    sta RA8889_DAT
+
+    lda #RA8889_VDHR1
+    sta RA8889_CMD
+    lda #RA8889_1024x600_VDHR1
+    sta RA8889_DAT
+
+; LCD_Horizontal_Non_Display
+    lda #RA8889_HNDR
+    sta RA8889_CMD
+    lda #RA8889_1024x600_HNDR
+    sta RA8889_DAT
+
+    lda #RA8889_HNDFTR
+    sta RA8889_CMD
+    lda #RA8889_1024x600_HNDFTR
+    sta RA8889_DAT
+
+; LCD_HSYNC_Start_Position
+    lda #RA8889_HSTR
+    sta RA8889_CMD
+    lda #RA8889_1024x600_HSTR
+    sta RA8889_DAT
+
+; LCD_HSYNC_Pulse_Width
+    lda #RA8889_HPWR
+    sta RA8889_CMD
+    lda #RA8889_1024x600_HPWR
+    sta RA8889_DAT
+
+; LCD_Vertical_Non_Display
+    lda #RA8889_VNDR0
+    sta RA8889_CMD
+    lda #RA8889_1024x600_VNDR0
+    sta RA8889_DAT
+
+    lda #RA8889_VNDR1
+    sta RA8889_CMD
+    lda #RA8889_1024x600_VNDR1
+    sta RA8889_DAT
+
+; LCD_VSYNC_Start_Position
+    lda #RA8889_VSTR
+    sta RA8889_CMD
+    lda #RA8889_1024x600_VSTR
+    sta RA8889_DAT
+
+; LCD_VSYNC_Pulse_Width
+    lda #RA8889_VPWR
+    sta RA8889_CMD
+    lda #RA8889_1024x600_VPWR
+    sta RA8889_DAT
+
+; Main_Image_Width
+    lda #RA8889_MIW0
+    sta RA8889_CMD
+    lda #RA8889_1024x600_MIW0
+    sta RA8889_DAT
+
+    lda #RA8889_MIW1
+    sta RA8889_CMD
+    lda #RA8889_1024x600_MIW1
+    sta RA8889_DAT
+
+; Canvas_image_width
+    lda #RA8889_CVS_IMWTH0
+    sta RA8889_CMD
+    lda #RA8889_1024x600_CVS_IMWTH0
+    sta RA8889_DAT
+
+    lda #RA8889_CVS_IMWTH1
+    sta RA8889_CMD
+    lda #RA8889_1024x600_CVS_IMWTH1
+    sta RA8889_DAT
+
+; Active_Window_WH
+    lda #RA8889_AW_WTH0
+    sta RA8889_CMD
+    lda #RA8889_1024x600_AW_WTH0
+    sta RA8889_DAT
+
+    lda #RA8889_AW_WTH1
+    sta RA8889_CMD
+    lda #RA8889_1024x600_AW_WTH1
+    sta RA8889_DAT
+
+    lda #RA8889_AW_HT0
+    sta RA8889_CMD
+    lda #RA8889_1024x600_AW_HT0
+    sta RA8889_DAT
+
+    lda #RA8889_AW_HT1
+    sta RA8889_CMD
+    lda #RA8889_1024x600_AW_HT1
+    sta RA8889_DAT
+
+
+    lda #RA8889_F_CURX0     ; Select X cursor LB
+    sta RA8889_CMD
+    lda #$00                ; Set to 0, beginning of line
+    sta RA8889_DAT
+    lda #RA8889_F_CURX1     ; Select X cursor LB
+    sta RA8889_CMD
+    lda #$00                ; Set to 0, beginning of line
+    sta RA8889_DAT
+    lda #RA8889_F_CURY0     ; Select X cursor LB
+    sta RA8889_CMD
+    lda #$00                ; Set to 0, beginning of line
+    sta RA8889_DAT
+    lda #RA8889_F_CURY1     ; Select X cursor LB
+    sta RA8889_CMD
+    lda #$00                ; Set to 0, beginning of line
+    sta RA8889_DAT
+
+
+    rts
+
+
+;-------------------------------------------------------------------------
+;  Turn on text cursor and set blinking
+;-------------------------------------------------------------------------
+
+display_blinking_cursor_on:
+    lda #RA8889_GTCCR
+    sta RA8889_CMD
+    lda RA8889_DAT
+    ora #SET_BIT_0 ; Text curson blinking
+    ora #SET_BIT_1 ; Text cursor on
+    sta RA8889_DAT
+    lda #RA8889_BTCR
+    sta RA8889_CMD
+    lda #$16           ; Blinking speed 25 frames
+    sta RA8889_DAT
+    rts
+
+;-------------------------------------------------------------------------
+;  Set text mode
+;-------------------------------------------------------------------------
+
+display_set_text_mode:
+    lda #RA8889_ICR
+    sta RA8889_CMD
+    lda RA8889_DAT
+    ora #SET_BIT_2 ; text mode
+    sta RA8889_DAT
+    rts
+
+;-------------------------------------------------------------------------
+;  Set graphics mode
+;-------------------------------------------------------------------------
+
+display_set_graphics_mode:
+    lda #RA8889_ICR
+    sta RA8889_CMD
+    lda RA8889_DAT
+    and #CLEAR_BIT_2 ; graphics mode
+    sta RA8889_DAT
+    rts
+
+;-------------------------------------------------------------------------
+;  Turn display on
+;-------------------------------------------------------------------------
+
+display_on:
+    lda #RA8889_DPCR
+    sta RA8889_CMD
+    lda RA8889_DAT
+    ora #SET_BIT_6 ; display on
+    sta RA8889_DAT
+    rts
+
+;-------------------------------------------------------------------------
+;  Turn display off
+;-------------------------------------------------------------------------
+
+display_off:
+    lda #RA8889_DPCR
+    sta RA8889_CMD
+    lda RA8889_DAT
+    and #CLEAR_BIT_6 ; display off
+    sta RA8889_DAT
+    rts
+
+;-------------------------------------------------------------------------
+;  Send 0-terminated string to display, pointer at by $zp_str_ptr
+;-------------------------------------------------------------------------
+
+snd_str_display:
+    pha              ; save A
+    tya              ; Y - > A
+    pha              ; save Y
+    lda #RA8889_MRWDP
+    sta RA8889_CMD   ; Set RA8889 register to MRWDP
+    ldy #$0          ; address counter
+snd_str_display_loop:
+    lda (zp_str_ptr), y    ; load character
+    beq snd_str_display_done  ; if 0, end of string, so done
+    sta RA8889_DAT         ; send char
+    iny                    ; next charachter
+    jmp snd_str_display_loop
+snd_str_display_done:
+    pla              ; restore Y
+    tay              ; A -> Y
+    pla              ; restore A
+    rts
+
+;-------------------------------------------------------------------------
+; Clear 1024x600 LCD display. Implemented as a BTE solid fill using black.
+; Assumes we are in text mode with a basic black background
+;-------------------------------------------------------------------------
+
+clear_screen:
+    lda #RA8889_BTE_CTRL1       ; Select Block Transfer Register
+    sta RA8889_CMD
+    lda #$0C                    ; Set function to Solid fill
+    sta RA8889_DAT
+
+; Set WidthxHeight of solid fill to full 1024x600 LCD screen size.
+
+    lda #RA8889_BTE_WTH0        ; Select BT width reg, LB
+    sta RA8889_CMD
+    lda #$00                    ; Set to 1024 LCD width, LB
+    sta RA8889_DAT
+    lda #RA8889_BTE_WTH1        ; Select BT width reg, HB
+    sta RA8889_CMD
+    lda #$04                    ; Set to 1024 LCD width, HB
+    sta RA8889_DAT
+
+    lda #RA8889_BTE_HIG0        ; Select BT height reg, LB
+    sta RA8889_CMD
+    lda #$58                    ; Set to 600 LCD height, LB
+    sta RA8889_DAT
+    lda #RA8889_BTE_HIG1        ; Select BT height reg, HB
+    sta RA8889_CMD
+    lda #$04                    ; Set to 600 LCD height, HB
+    sta RA8889_DAT
+
+; Set destination image width to 1024 LCD width
+
+    lda #RA8889_DT_WTH0         ; Select BT height reg, LB
+    sta RA8889_CMD
+    lda #$00                  ;
+    sta RA8889_DAT
+    lda #RA8889_DT_WTH1
+    sta RA8889_CMD
+    lda #$04                  ;
+    sta RA8889_DAT
+
+    jsr display_set_fg_color_black  ; Clear screen by filling with black color
+
+    lda #RA8889_BTE_CTRL0           ; Select BT Control register
+    sta RA8889_CMD
+    lda RA8889_DAT                  ; Read it
+    ora #SET_BIT_4                  ; Set bit4: start BTE function
+    sta RA8889_DAT
+
+    lda #RA8889_BTE_CTRL0           ; Technically not required...
+    sta RA8889_CMD
+clear_screen_loop:
+    lda RA8889_DAT                  ; Read BT Control
+    and #SET_BIT_4                  ; Check if still busy with function
+    bne clear_screen_loop           ; Still busy....
+    rts                             ; Screen cleared!
+
+;-------------------------------------------------------------------------
+; Set LCD display foreground color to white
+;-------------------------------------------------------------------------
+
+display_set_fg_color_white:
+    lda #RA8889_FGCR    ; Select foreground red
+    sta RA8889_CMD
+    lda #$FF
+    sta RA8889_DAT
+    lda #RA8889_FGCG    ; Select foreground green
+    sta RA8889_CMD
+    lda #$FF
+    sta RA8889_DAT
+    lda #RA8889_FGCB    ; Select foreground blue
+    sta RA8889_CMD
+    lda #$FF
+    sta RA8889_DAT
+    rts
+
+;-------------------------------------------------------------------------
+; Set LCD display foreground color to black
+;-------------------------------------------------------------------------
+
+display_set_fg_color_black:
+    lda #RA8889_FGCR
+    sta RA8889_CMD
+    lda #$00
+    sta RA8889_DAT
+    lda #RA8889_FGCG
+    sta RA8889_CMD
+    lda #$00
+    sta RA8889_DAT
+    lda #RA8889_FGCB
+    sta RA8889_CMD
+    lda #$00
+    sta RA8889_DAT
+    rts
+
+;-------------------------------------------------------------------------
+; Set LCD display background color to black
+;-------------------------------------------------------------------------
+
+display_set_bg_color_black:
+    lda #RA8889_BGCR
+    sta RA8889_CMD
+    lda #$00
+    sta RA8889_DAT
+    lda #RA8889_BGCG
+    sta RA8889_CMD
+    lda #$00
+    sta RA8889_DAT
+    lda #RA8889_BGCB
+    sta RA8889_CMD
+    lda #$00
+    sta RA8889_DAT
+    rts
+
+;-------------------------------------------------------------------------
+; LCD display carriage return
+;-------------------------------------------------------------------------
+snd_cr_display:
+
+    lda DISPLAY_CTRL
+    and #$01
+    beq snd_cr_display_done
+
+    lda #RA8889_F_CURX0     ; Select X cursor LB
+    sta RA8889_CMD
+    lda #$00                ; Set to 0, beginning of line
+    sta RA8889_DAT
+    lda #RA8889_F_CURX1     ; Select X cursor LB
+    sta RA8889_CMD
+    lda #$00                ; Set to 0, beginning of line
+    sta RA8889_DAT
+    lda #RA8889_F_CURY0     ; Select Y cursor LB
+    sta RA8889_CMD
+    lda RA8889_DAT          ; Read current Y value LB
+    clc                     ; Clear carry flag
+    adc DISPLAY_CHAR_HT     ; Add character height: move one line down
+    sta RA8889_DAT	    ; Store LB of Y value
+    lda #RA8889_F_CURY1      ; Read current Y value LHB
+    sta RA8889_CMD
+    lda RA8889_DAT          ; Read current Y value HB
+    adc #$00                ; Add 0 with carry, adds one if LB wrapped
+    sta RA8889_DAT	    ; store HB  of Y value.
+snd_cr_display_done:
+    rts
+
+
 
 ;-------------------------------------------------------------------------
 ;  Interrupt handler
@@ -663,12 +1400,13 @@ acia_irq:
 ;  Messages, Errors
 ;-------------------------------------------------------------------------
 
-startup_message: .asciiz "GRU-10 Computer, v0.125"
+startup_message: .asciiz "GRU-10 Computer, v0.126"
 boot_message: .asciiz "Kernel v0.1, ready..."
 file_loaded_message: .asciiz "File loaded, size (B): "
 wozmon_message: .asciiz "Starting WozMon"
 load_message: .asciiz "Waiting for file"
 run_message: .asciiz "Running app"
+dsp_err_msg: .asciiz "No Display found"
 
  .org $fffa
  .word nmi
