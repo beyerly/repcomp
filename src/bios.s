@@ -33,6 +33,12 @@ zp_str_ptr = $00   ; 2B, Pointer to message string
 zp_app_ptr = $02   ; 2B. Pointer to current page beign transferred. L always 0, H is active page.
 
 
+cmd_input_str   = $10           ; 2B
+cmd_str_idx     = $12           ; 2B
+cmd_tmp_str     = $14           ; 2B
+
+GRUOS_INPUT_STR = $0200         ; input string buffer, 256B, Shared with wozmon!
+
 ;-------------------
 ;  WozMon stuff
 ;-------------------
@@ -78,6 +84,13 @@ APP_SIZE   = $1008  ; 2B. Size of application in B. LH first.
 APP_CNT    = $100A   ; 2B. Counter tracking how many B if app we've transferred
 DISPLAY_CTRL = $100C  ; 1B. Display control. b0 = echo on display.
 DISPLAY_CHAR_HT = $100D  ; 1B. For text mode, character height in pixels. Used for CR.
+DISPLAY_CHAR_WT = $100E  ; 1B. For text mode, character width in pixels. Used for CR.
+FG_COLOR_R = $100F   ; 1B Foreground color, Red
+FG_COLOR_G = $1010   ; 1B Foreground color, Green
+FG_COLOR_B = $1011   ; 1B Foreground color, Blue
+BG_COLOR_R = $1012   ; 1B Background color, Red
+BG_COLOR_G = $1013   ; 1B Background color, Green
+BG_COLOR_B = $1014   ; 1B Background color, Blue
 
 USER_APP   = $2000   ; Start address for user programms
 
@@ -176,6 +189,17 @@ RA8889_BTCR = $3D
 
 RA8889_BTE_CTRL0 = $90
 RA8889_BTE_CTRL1 = $91
+RA8889_BTE_COLR = $92
+RA8889_S0_STR0 = $93
+RA8889_S0_STR1 = $94
+RA8889_S0_STR2 = $95
+RA8889_S0_STR3 = $96
+RA8889_S0_WTH0 = $97
+RA8889_S0_WTH1 = $98
+RA8889_S0_X0 = $99
+RA8889_S0_X1 = $9A
+RA8889_S0_Y0 = $9B
+RA8889_S0_Y1 = $9C
 RA8889_BTE_WTH0 = $B1
 RA8889_BTE_WTH1 = $B2
 RA8889_BTE_HIG0 = $B3
@@ -183,6 +207,10 @@ RA8889_BTE_HIG1 = $B4
 
 RA8889_DT_WTH0 = $AB
 RA8889_DT_WTH1 = $AC
+RA8889_DT_X0 = $AD
+RA8889_DT_X1 = $AE
+RA8889_DT_Y0 = $AF
+RA8889_DT_Y1 = $B0
 
 
 RA8889_SSR_DEFAULT = $02
@@ -237,6 +265,7 @@ CLEAR_BIT_7 = $7F
 ;  Reset Vector
 ;-------------------------------------------------------------------------
 
+
 reset:
     cld                 ;  Clear decimal arithmetic mode
     cli                 ; clear interrupt disable
@@ -252,7 +281,8 @@ reset:
     sta PORTAPCR        ; VIA PORT A CA1 to pos edge input from keyboard controller
     lda #82
     sta PORTAIER        ; Enable VIA CA1 interrupt for keyboard
-
+    jsr config_keyboard
+    
     lda #$00
     sta ACIA_STATUS     ; Reset ACIA
     lda #$1f
@@ -268,10 +298,18 @@ reset:
     jsr display_blinking_cursor_on
     jsr display_on
     jsr clear_screen
-    jsr display_set_fg_color_white
-    jsr display_set_bg_color_black
+    lda #$00              ; Set BG color black
+    sta BG_COLOR_R
+    sta BG_COLOR_G
+    sta BG_COLOR_B
+    jsr display_set_bg_color
+    lda #$FF              ; Set FG white
+    sta FG_COLOR_R
+    sta FG_COLOR_G
+    sta FG_COLOR_B
+    jsr display_set_fg_color
     
-    lda #$01
+    lda #$01                         ; Enable display echo
     sta DISPLAY_CTRL
     lda #DEFAULT_CHAR_HEIGHT
     sta DISPLAY_CHAR_HT
@@ -305,21 +343,70 @@ kernel:
     ldx #>boot_message
     stx zp_str_ptr+1
     jsr snd_str            ; Send boot message to serial
+;    jsr snd_cr             ; newline
+    jmp gruos_start
+
+gruos_start:
     jsr snd_cr             ; newline
-kernel_loop:
-    jsr get_acia_char       ; read serial
-    cmp #$ff                ; is it a header of an app?
-    beq jump_load_app       ; yes, load app
-    cmp #$6c                ; 'l'; list program
-    beq jump_list_app       ; yes, list app
-    cmp #$65                ; 'e'; execute program
-    beq jump_exe_app        ; yes, execute app
-    cmp #$77                ; 'w'; execute program
-    beq jump_wozmon         ; yes, execute wozmon
-; no known command: keep on listening
-    jsr led_out             ; echo on led
-    jsr send_char           ; echo
-    jmp kernel_loop
+    lda #<GRUOS_INPUT_STR       ; set cmd input string pointer, and string index pointers
+    sta cmd_input_str
+    lda #>GRUOS_INPUT_STR
+    sta cmd_input_str + 1
+    ldy #$00                    ; Set character index to 0
+    jsr gruos_snd_prompt        ; Show prompt
+gruos_kernel_loop:
+    jsr get_char                ; read input 
+    jsr send_char               ; echo on display/serial
+    cmp #CR                     ; Is CR?
+    beq gruos_cmd_parse         ; Yes, parse command
+    sta (cmd_input_str), Y      ; Store char in input buffer
+    iny                         ; Next character
+    jmp gruos_kernel_loop
+gruos_cmd_parse:                ; I have cmd in input buffer!
+    cpy #$00
+    beq gruos_start
+    lda #$00
+    sta (cmd_input_str), Y      ; Zero-terminate input string
+    ldx #$00                    ; Set cmd index to 0
+    ldy #$00                    ; Set character index to 0
+gruos_cmd_parse_loop:           ; Select command[X] to compare with
+    lda gruos_cmd_table_lo, X ; Low byte of address of cmd[X] string
+    sta cmd_tmp_str
+    lda gruos_cmd_table_hi, X ; Hi byte of address of cmd[X] string
+    sta cmd_tmp_str + 1         ; cmd_tmp_str points to character of cmd[X] string
+gruos_cmd_parse_char_loop:      ; Parse cmd[X]
+    lda (cmd_tmp_str), Y        ; Load character[Y] of cmd[X] string
+    cmp #$00                    ; Zero termination?
+    beq gruos_cmd_match         ; Yes, we found a cmd match! X contains cmd index.
+    cmp (cmd_input_str), Y      ; No match yet, compare with input character
+    bne gruos_nxt_cmd           ; No character match, check next command
+    iny                         ; Character match! Check next character of command
+    jmp gruos_cmd_parse_char_loop
+gruos_nxt_cmd:
+    inx                         ; check match with next cmd
+    cpx #GRUOS_NUM_CMDS         ; Did we check all cmds?
+    beq gruos_syntax_error      ; Yes, command is unknown, syntax error!
+    jmp gruos_cmd_parse_loop    ; No, check next command
+gruos_cmd_match:
+; For now, no argumetns yet, directly do command index X!
+; Note we directly tie a cmd index to a command, may have to make this a lookup...
+    jsr snd_cr
+    txa
+    cmp #$00                ; idx 0?
+    beq jump_wozmon         ; yes, start wozmon
+    cmp #$01                ; idx 1?
+    beq jump_load_app       ; yes, start wozmon
+    cmp #$02                ; idx 2?
+    beq jump_exe_app        ; yes, start wozmon
+    cmp #$03                ; idx 2?
+    beq jump_list_app        ; yes, start wozmon
+    ldx #<gruos_kernel_err     ; Should never happen! Index should exist...
+    stx zp_str_ptr
+    ldx #>gruos_kernel_err
+    stx zp_str_ptr+1
+    jsr snd_str             ; Send string to serail and display
+    jmp gruos_kernel_loop   ; Try again...
+
 jump_wozmon:                ; Absolute jump because brach is out of range.
     jmp wozmon
 jump_load_app:              ; Absolute jump because brach is out of range.
@@ -328,6 +415,42 @@ jump_list_app:              ; Absolute jump because brach is out of range.
     jmp list_app
 jump_exe_app:               ; Absolute jump because brach is out of range.
     jmp exe_app
+
+
+gruos_syntax_error:
+    jsr snd_cr
+    ldx #<gruos_syn_err ;
+    stx zp_str_ptr
+    ldx #>gruos_syn_err
+    stx zp_str_ptr+1
+    jsr snd_str                 ; Send string to serail and display
+    jmp gruos_start             ; Start over.
+
+gruos_snd_prompt:
+    ldx #<gruos_prompt               ;
+    stx zp_str_ptr
+    ldx #>gruos_prompt
+    stx zp_str_ptr+1
+    jsr snd_str                 ; Send string to serail and display
+    rts
+
+
+config_keyboard:
+    lda PORTAIFR           ;  Clear status if any, ignore
+    lda PORTA              ; We have a char, read from VIA PORT A
+    cmp #$FA
+    bne no_keyboard
+    rts
+
+no_keyboard:
+    ldx #<kbd_err_msg ;
+    stx zp_str_ptr
+    ldx #>kbd_err_msg
+    stx zp_str_ptr+1
+    jsr snd_str        ; Send Startup message to serial
+    jsr snd_cr         ; newline
+    rts
+
 
 ;-------------------------------------------------------------------------
 ;  Simple pattern on LEDs on VIA, just for debug.
@@ -405,10 +528,18 @@ snd_str:
 ;-------------------------------------------------------------------------
 
 snd_cr:
-    pha
+    pha              ; save A
+    txa              ; X - > A
+    pha              ; save X
+    tya              ; Y - > A
+    pha              ; save Y
     jsr snd_cr_display
     jsr snd_cr_acia
-    pla
+    pla              ; restore Y
+    tay              ; A -> Y
+    pla              ; restore X
+    tax              ; A -> X
+    pla              ; restore A
     rts
 
 snd_cr_acia:
@@ -443,6 +574,7 @@ snd_str_acia_done:
 ;  Execute code at $USER_APP. Only singel page code snippets
 ;-------------------------------------------------------------------------
 
+
 exe_app:
     ldx #<run_message ;
     stx zp_str_ptr
@@ -456,6 +588,8 @@ exe_app:
 ;  Send code at $USER_APP on serial. Only singel page code snippets
 ;  Destructive on A, X, Y but we always return to kernel loop.
 ;-------------------------------------------------------------------------
+
+;; @@@ doesn;t scroll yet; needs to check end of line and send CD!!!
 
 list_app:
     ldx APP_SIZE    ; Load app size in bytes, less than 255
@@ -481,9 +615,16 @@ list_loop:
 ;  Destructive on A, X, Y but we always return to kernel loop.
 ;-------------------------------------------------------------------------
 load_app:
+    ldx #<load_message;
+    stx zp_str_ptr
+    ldx #>load_message
+    stx zp_str_ptr+1
+    jsr snd_str            ; Send Startup message to serial
+    jsr snd_cr             ; newline
 ;-------------------------------------------------------------------------
 ;  Set up file transfer
 ;-------------------------------------------------------------------------
+    jsr get_acia_char    ; Read and ignore header 0xFF for now
     jsr get_acia_char    ; Read and ignore sub-command for now
     lda #<USER_APP       ; Load LB of app start address. Should be 0.
     sta zp_app_ptr       ; Set LB of app pointer to start address
@@ -528,20 +669,20 @@ load_app_done:              ; We are doen with transfer.
   jsr PRBYTE             ; show file size on com
   lda APP_SIZE + 1
   jsr snd_cr             ; new line
-  jmp kernel_loop   ; done
+  jmp gruos_start   ; done
 
 ;-------------------------------------------------------------------------
-;  Return byte from serial in A. This is blocking.
+;  Read input from keyboard or serial in A. This is blocking.
 ;-------------------------------------------------------------------------
 
-get_acia_char:
+get_char:
     lda ACIA_STATUS        ; Check status
     and #$08               ; Receive ready set?
     bne load_acia_char     ; Yes! Read from ACIA
     lda PORTAIFR           ; Check VIA status for CA1 interrupt (polling)
     and #$02               ; Receive ready set?
-    bne load_kb_char       ; Yes! Read from ACIA
-    jmp get_acia_char      ; Neither, check again (blocking!!)
+    bne load_kb_char       ; Yes! Read from keyboard
+    jmp get_char           ; Neither, check again (blocking!!)
 load_acia_char:
     lda ACIA_DATA          ; We have a char, read from ACIA
     rts
@@ -549,12 +690,12 @@ load_kb_char:
     lda PORTA              ; We have a char, read from VIA PORT A
     rts
 
-;get_acia_char:
-;    lda ACIA_STATUS        ; Check status
-;    and #$08               ; Receive ready set?
-;    beq get_acia_char      ; No? check again.
-;    lda ACIA_DATA          ; We have a char, read from ACIA
-;    rts
+get_acia_char:
+    lda ACIA_STATUS        ; Check status
+    and #$08               ; Receive ready set?
+    beq get_acia_char      ; No? check again.
+    lda ACIA_DATA          ; We have a char, read from ACIA
+    rts
 
 
 
@@ -613,7 +754,7 @@ send_char_display_not_cr:
     sta RA8889_DAT     ; send char
     rts
 send_char_display_snd_cr:
-    jsr snd_cr_display
+;    jsr snd_cr_display
 send_char_display_done:
     pla
     rts
@@ -703,7 +844,7 @@ BACKSPACE:
                 bmi     GETLINE        ; Oops, line's empty, reinitialize
 
 NEXTCHAR:
-                jsr     get_acia_char  ; Wait for key press, note WozMon expects B7=1, and we don;t have that
+                jsr     get_char  ; Wait for key press, note WozMon expects B7=1, and we don;t have that
                 jsr     led_out
                 sta     IN,Y           ; Add to text buffer
                 jsr     send_char      ; Display character
@@ -871,7 +1012,6 @@ PRHEX:
 PRHEX_ECHO:
                 jsr send_char
                 rts
-
 
 ;-------------------------------------------------------------------------
 ;  RA8889 LCD display;
@@ -1129,6 +1269,12 @@ display_check_sdram:
     sta RA8889_DAT
 
 
+; BTE color 
+    lda #RA8889_BTE_COLR      
+    sta RA8889_CMD
+    lda #$25                ; 16b for Destination, source 0 and 1
+    sta RA8889_DAT
+
     rts
 
 
@@ -1248,8 +1394,29 @@ clear_screen:
     sta RA8889_DAT
     lda #RA8889_BTE_HIG1        ; Select BT height reg, HB
     sta RA8889_CMD
-    lda #$04                    ; Set to 600 LCD height, HB
+    lda #$02                    ; Set to 600 LCD height, HB
     sta RA8889_DAT
+
+; Coordinates top-left of screen
+
+    lda #RA8889_DT_X0      
+    sta RA8889_CMD
+    lda #$00               
+    sta RA8889_DAT
+    lda #RA8889_DT_X1      
+    sta RA8889_CMD
+    lda #$00               
+    sta RA8889_DAT
+
+    lda #RA8889_DT_Y0      
+    sta RA8889_CMD
+    lda #$00             
+    sta RA8889_DAT
+    lda #RA8889_DT_Y1      
+    sta RA8889_CMD
+    lda #$00               
+    sta RA8889_DAT
+
 
 ; Set destination image width to 1024 LCD width
 
@@ -1262,7 +1429,19 @@ clear_screen:
     lda #$04                  ;
     sta RA8889_DAT
 
-    jsr display_set_fg_color_black  ; Clear screen by filling with black color
+    lda FG_COLOR_R
+    pha
+    lda FG_COLOR_G
+    pha
+    lda FG_COLOR_B
+    pha
+    lda BG_COLOR_R
+    sta FG_COLOR_R
+    lda BG_COLOR_G
+    sta FG_COLOR_G
+    lda BG_COLOR_B
+    sta FG_COLOR_B
+    jsr display_set_fg_color  ; Clear screen by filling with black color
 
     lda #RA8889_BTE_CTRL0           ; Select BT Control register
     sta RA8889_CMD
@@ -1276,64 +1455,295 @@ clear_screen_loop:
     lda RA8889_DAT                  ; Read BT Control
     and #SET_BIT_4                  ; Check if still busy with function
     bne clear_screen_loop           ; Still busy....
+
+; set back original FG color
+
+    pla
+    sta FG_COLOR_B
+    pla
+    sta FG_COLOR_G
+    pla
+    sta FG_COLOR_R
+    jsr display_set_fg_color  ; Clear screen by filling with black color
+
     rts                             ; Screen cleared!
 
 ;-------------------------------------------------------------------------
-; Set LCD display foreground color to white
+; Set LCD display foreground and background colors 
+; PAssing RGB arguments through FG/GG_COLOR parameters
 ;-------------------------------------------------------------------------
 
-display_set_fg_color_white:
+
+display_set_fg_color:
     lda #RA8889_FGCR    ; Select foreground red
     sta RA8889_CMD
-    lda #$FF
+    lda FG_COLOR_R
     sta RA8889_DAT
     lda #RA8889_FGCG    ; Select foreground green
     sta RA8889_CMD
-    lda #$FF
+    lda FG_COLOR_G
     sta RA8889_DAT
     lda #RA8889_FGCB    ; Select foreground blue
     sta RA8889_CMD
-    lda #$FF
+    lda FG_COLOR_B
     sta RA8889_DAT
+    rts
+
+
+
+display_set_bg_color:
+    lda #RA8889_BGCR    ; Select foreground red
+    sta RA8889_CMD
+    lda BG_COLOR_R
+    sta RA8889_DAT
+    lda #RA8889_BGCG    ; Select foreground green
+    sta RA8889_CMD
+    lda BG_COLOR_G
+    sta RA8889_DAT
+    lda #RA8889_BGCB    ; Select foreground blue
+    sta RA8889_CMD
+    lda BG_COLOR_B
+    sta RA8889_DAT
+    rts
+
+;-------------------------------------------------------------------------
+; Display scroll in text mode
+;-------------------------------------------------------------------------
+
+
+display_scroll:
+    lda #RA8889_BTE_CTRL1       ; Select Block Transfer Register
+    sta RA8889_CMD
+    lda #$C2                    ; Set function to mem copy with ROP, ROP = S0
+    sta RA8889_DAT
+
+; Set WidthxHeight of solid fill to full 1024x600 LCD screen size.
+
+    lda #RA8889_BTE_WTH0        ; Select BT width reg, LB
+    sta RA8889_CMD
+    lda #$00                   ; Set to 1024 LCD width, LB
+    sta RA8889_DAT
+    lda #RA8889_BTE_WTH1        ; Select BT width reg, HB
+    sta RA8889_CMD
+    lda #$04                    ; Set to 1024 LCD width, HB
+    sta RA8889_DAT
+
+    lda #RA8889_BTE_HIG0        ; Select BT height reg, LB
+    sta RA8889_CMD
+    lda #$42                    ; Set to 600 LCD height, LB
+    sta RA8889_DAT
+    lda #RA8889_BTE_HIG1        ; Select BT height reg, HB
+    sta RA8889_CMD
+    lda #$02                    ; Set to 600 LCD height, HB
+    sta RA8889_DAT
+
+; Set destination image width to 1024 LCD width
+
+    lda #RA8889_DT_WTH0         ; Select BT height reg, LB
+    sta RA8889_CMD
+    lda #$00                  ;
+    sta RA8889_DAT
+    lda #RA8889_DT_WTH1
+    sta RA8889_CMD
+    lda #$04                  ;
+    sta RA8889_DAT
+
+
+; Dest X, Y top of screen
+
+    lda #RA8889_DT_X0      
+    sta RA8889_CMD
+    lda #$00               
+    sta RA8889_DAT
+    lda #RA8889_DT_X1      
+    sta RA8889_CMD
+    lda #$00               
+    sta RA8889_DAT
+
+    lda #RA8889_DT_Y0      
+    sta RA8889_CMD
+    lda #$00             
+    sta RA8889_DAT
+    lda #RA8889_DT_Y1      
+    sta RA8889_CMD
+    lda #$00               
+    sta RA8889_DAT
+
+
+; Source 0 X and Y. Find the top of the second text line.
+
+    lda #RA8889_S0_X0        
+    sta RA8889_CMD
+    lda #$00                 
+    sta RA8889_DAT
+    lda #RA8889_S0_X1        
+    sta RA8889_CMD
+    lda #$00                 
+    sta RA8889_DAT
+
+    lda #RA8889_S0_Y0        
+    sta RA8889_CMD
+    lda #$15                 
+    sta RA8889_DAT
+    lda #RA8889_S0_Y1        
+    sta RA8889_CMD
+    lda #$00                 
+    sta RA8889_DAT
+
+; Set source image width to 1024 LCD width
+
+    lda #RA8889_S0_WTH0         ; Select BT height reg, LB
+    sta RA8889_CMD
+    lda #$00                  ;
+    sta RA8889_DAT
+    lda #RA8889_S0_WTH1
+    sta RA8889_CMD
+    lda #$04                  ;
+    sta RA8889_DAT
+
+
+    lda #RA8889_BTE_CTRL0           ; Select BT Control register
+    sta RA8889_CMD
+    lda RA8889_DAT                  ; Read it
+    ora #SET_BIT_4                  ; Set bit4: start BTE function
+    sta RA8889_DAT
+
+    lda #RA8889_BTE_CTRL0           ; Technically not required...
+    sta RA8889_CMD
+dsp_scroll_loop:
+    lda RA8889_DAT                  ; Read BT Control
+    and #SET_BIT_4                  ; Check if still busy with function
+    bne dsp_scroll_loop             ; Still busy....
+
+
+; clear last line with BG color
+
+    lda #RA8889_BTE_CTRL1       ; Select Block Transfer Register
+    sta RA8889_CMD
+    lda #$0C                    ; Set function to Solid fill
+    sta RA8889_DAT
+
+; Set WidthxHeight of solid fill to full 1024 LCD screen size, and hight of 1 text line
+
+    lda #RA8889_BTE_WTH0        ; Select BT width reg, LB
+    sta RA8889_CMD
+    lda #$00                    ; Set to 1024 LCD width, LB
+    sta RA8889_DAT
+    lda #RA8889_BTE_WTH1        ; Select BT width reg, HB
+    sta RA8889_CMD
+    lda #$04                    ; Set to 1024 LCD width, HB
+    sta RA8889_DAT
+
+    lda #RA8889_BTE_HIG0        ; Select BT height reg, LB
+    sta RA8889_CMD
+    lda #$1B                    ; use text high tvariable!!!!
+    sta RA8889_DAT
+    lda #RA8889_BTE_HIG1        ; Select BT height reg, HB
+    sta RA8889_CMD
+    lda #$00                    ; Set to 600 LCD height, HB
+    sta RA8889_DAT
+
+; Destination X, Y, target top of last tect line
+
+    lda #RA8889_DT_X0      
+    sta RA8889_CMD
+    lda #$00               
+    sta RA8889_DAT
+    lda #RA8889_DT_X1      
+    sta RA8889_CMD
+    lda #$00               
+    sta RA8889_DAT
+
+    lda #RA8889_DT_Y0      
+    sta RA8889_CMD
+    lda #$36             
+    sta RA8889_DAT
+    lda #RA8889_DT_Y1      
+    sta RA8889_CMD
+    lda #$02               
+    sta RA8889_DAT
+
+
+    ; Fill with  BG color, first save FG color for later.
+    lda FG_COLOR_R
+    pha
+    lda FG_COLOR_G
+    pha
+    lda FG_COLOR_B
+    pha
+    lda BG_COLOR_R
+    sta FG_COLOR_R
+    lda BG_COLOR_G
+    sta FG_COLOR_G
+    lda BG_COLOR_B
+    sta FG_COLOR_B
+    jsr display_set_fg_color  ; 
+
+
+; Set destination image width to 1024 LCD width
+
+    lda #RA8889_DT_WTH0         ; Select BT height reg, LB
+    sta RA8889_CMD
+    lda #$00                  ;
+    sta RA8889_DAT
+    lda #RA8889_DT_WTH1
+    sta RA8889_CMD
+    lda #$04                  ;
+    sta RA8889_DAT
+
+
+    lda #RA8889_BTE_CTRL0           ; Select BT Control register
+    sta RA8889_CMD
+    lda RA8889_DAT                  ; Read it
+    ora #SET_BIT_4                  ; Set bit4: start BTE function
+    sta RA8889_DAT
+
+    lda #RA8889_BTE_CTRL0           ; Technically not required...
+    sta RA8889_CMD
+dsp_scroll_clear_line_loop:
+    lda RA8889_DAT                  ; Read BT Control
+    and #SET_BIT_4                  ; Check if still busy with function
+    bne dsp_scroll_clear_line_loop           ; Still busy....
+
+
+; set back original FG color
+
+    pla
+    sta FG_COLOR_B
+    pla
+    sta FG_COLOR_G
+    pla
+    sta FG_COLOR_R
+    jsr display_set_fg_color  ; Clear screen by filling with black color
+
+
+; set cursor to beginnign of last line
+
+    lda #RA8889_F_CURX0     ; Select X cursor LB
+    sta RA8889_CMD
+    lda #$00                ; Set to 0, beginning of line
+    sta RA8889_DAT
+    lda #RA8889_F_CURX1     ; Select X cursor LB
+    sta RA8889_CMD
+    lda #$00                ; Set to 0, beginning of line
+    sta RA8889_DAT
+    lda #RA8889_F_CURY0     ; Select Y cursor LB
+    sta RA8889_CMD
+    lda #$36                ; Set to 0, beginning of line
+    sta RA8889_DAT
+    lda #RA8889_F_CURY1     ; Select Y cursor LB
+    sta RA8889_CMD
+    lda #$02                ; Set to 0, beginning of line
+    sta RA8889_DAT
+
+
     rts
 
 ;-------------------------------------------------------------------------
 ; Set LCD display foreground color to black
 ;-------------------------------------------------------------------------
 
-display_set_fg_color_black:
-    lda #RA8889_FGCR
-    sta RA8889_CMD
-    lda #$00
-    sta RA8889_DAT
-    lda #RA8889_FGCG
-    sta RA8889_CMD
-    lda #$00
-    sta RA8889_DAT
-    lda #RA8889_FGCB
-    sta RA8889_CMD
-    lda #$00
-    sta RA8889_DAT
-    rts
 
-;-------------------------------------------------------------------------
-; Set LCD display background color to black
-;-------------------------------------------------------------------------
-
-display_set_bg_color_black:
-    lda #RA8889_BGCR
-    sta RA8889_CMD
-    lda #$00
-    sta RA8889_DAT
-    lda #RA8889_BGCG
-    sta RA8889_CMD
-    lda #$00
-    sta RA8889_DAT
-    lda #RA8889_BGCB
-    sta RA8889_CMD
-    lda #$00
-    sta RA8889_DAT
-    rts
 
 ;-------------------------------------------------------------------------
 ; LCD display carriage return
@@ -1344,6 +1754,23 @@ snd_cr_display:
     and #$01
     beq snd_cr_display_done
 
+    lda #RA8889_F_CURY0     ; Select Y cursor LB
+    sta RA8889_CMD
+    lda RA8889_DAT          ; Read current Y value LB
+    cmp #$36
+    bcc snd_cr_display_no_scroll 
+    lda #RA8889_F_CURY1     ; Select Y cursor LB
+    sta RA8889_CMD
+    lda RA8889_DAT          ; Read current Y value LB
+    cmp #$02
+    bcc snd_cr_display_no_scroll 
+
+
+    jsr display_scroll
+    rts
+
+
+snd_cr_display_no_scroll:
     lda #RA8889_F_CURX0     ; Select X cursor LB
     sta RA8889_CMD
     lda #$00                ; Set to 0, beginning of line
@@ -1401,12 +1828,33 @@ acia_irq:
 ;-------------------------------------------------------------------------
 
 startup_message: .asciiz "GRU-10 Computer, v0.127"
-boot_message: .asciiz "Kernel v0.1, ready..."
+boot_message: .asciiz "GRU BIOS v0.1, ready..."
 file_loaded_message: .asciiz "File loaded, size (B): "
 wozmon_message: .asciiz "Starting WozMon"
-load_message: .asciiz "Waiting for file"
+load_message: .asciiz "Waiting for file on serial port"
 run_message: .asciiz "Running app"
 dsp_err_msg: .asciiz "No Display found"
+kbd_err_msg: .asciiz "No Keyboard found"
+
+
+gruos_prompt:       .asciiz "gru-bios>"
+
+gruos_cmd_wozmon:   .asciiz "wozmon"
+gruos_cmd_load:     .asciiz "load"
+gruos_cmd_run:      .asciiz "run"
+gruos_cmd_list:      .asciiz "list"
+
+gruos_syn_err:      .asciiz "Syntax Error"
+gruos_kernel_err:   .asciiz "Kernel Error"
+
+GRUOS_NUM_CMDS = $04
+gruos_cmd_table_lo: .byte<gruos_cmd_wozmon, <gruos_cmd_load, <gruos_cmd_run, <gruos_cmd_list
+gruos_cmd_table_hi: .byte>gruos_cmd_wozmon, >gruos_cmd_load, >gruos_cmd_run, >gruos_cmd_list
+
+;gruos_sr_table_lo: .byte<gruos_sr_wozmon, <gruos_sr_load, <gruos_sr_run
+;gruos_sr_table_hi: .byte>gruos_sr_wozmon, >gruos_sr_load, >gruos_sr_run
+
+
 
  .org $fffa
  .word nmi
