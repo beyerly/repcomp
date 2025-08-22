@@ -2,7 +2,7 @@
 
 echo compiling
 
-../../../tools/vasm/vasm6502_oldstyle -Fbin -dotdir bios.s -L symbols.txt
+../../../../tools/vasm/vasm6502_oldstyle -Fbin -dotdir bios.s -L symbols_bios.txt
 
 #hexdump a.out
 
