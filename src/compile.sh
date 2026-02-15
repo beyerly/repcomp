@@ -6,4 +6,4 @@ echo compiling
 
 #hexdump a.out
 
-minipro -p "AT28C256" -w a.out 
+minipro -p "AT28C256" -w a.out

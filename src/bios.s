@@ -1,5 +1,5 @@
 ;-------------------------------------------------------------------------
-;  GRU-10 BIOS v0.129
+;  GRU-10 BIOS v0.133
 ;-------------------------------------------------------------------------
 
  .org $8000
@@ -8,19 +8,29 @@
 ;  HW addresses
 ;-------------------------------------------------------------------------
 
-PORTB = $6000    ; VIA PORTB
-PORTA = $6001    ; VIA PORTA
+PORTB    = $6000    ; VIA PORTB
+PORTA    = $6001    ; VIA PORTA
 PORTBDDR = $6002 ; VIA PORTB Data Direction
 PORTADDR = $6003 ; VIA PORTA Data Direction
+VIAT1L   = $6004 ; VIA T1 low order latches
+VIAT1H   = $6005 ; VIA T1 high order latches
 PORTAPCR = $600C ; VIA PORTA PCR register
 PORTAIFR = $600D ; VIA PORTA IFR register
 PORTAIER = $600E ; VIA PORTA IRR register
-AUXCTRL = $600B  ; VIA Auxilary Control Register
+AUXCTRL  = $600B  ; VIA Auxilary Control Register
 
-ACIA_DATA = $4000
+ACIA_DATA   = $4000
 ACIA_STATUS = $4001
-ACIA_CMD = $4002
-ACIA_CTRL = $4003
+ACIA_CMD    = $4002
+ACIA_CTRL   = $4003
+
+; SID
+SID_BASE   = $4800
+SID_OSC0   = $4800
+SID_OSC1   = $4801
+SID_OSC3   = $4802
+SID_CTRL   = $4803
+
 
 ;-------------------------------------------------------------------------
 ;  Variables
@@ -32,16 +42,21 @@ ACIA_CTRL = $4003
 zp_str_ptr = $00   ; 2B, Pointer to message string
 zp_app_ptr = $02   ; 2B. Pointer to current page beign transferred. L always 0, H is active page.
 
-cmd_input_str   = $10           ; 2B
-cmd_tmp_str     = $12           ; 2B
+;-------------------------------------------------------------------------
+;  GRU bios cli parsing variables
+;-------------------------------------------------------------------------
+
+cmd_input_str   = $10           ; 2B pointer to bios cli input string
+cmd_tmp_str     = $12           ; 2B pointer to bios cli temporary input string
 cmd_arg_idx     = $14           ; 1B current index of arg; pointer to first char in input string
-num_args        = $15           ; 1B
-arg_lo          = $16
-arg_hi          = $17
-cmd_arg_stack     = $18           ; 4B stack of argument indexes, pointed at ny num_args
+num_args        = $15           ; 1B number of arguments found after bios cmd
+arg_lo          = $16           ; Low byte of 16b argument
+arg_hi          = $17           ; Hi byte of 16b argument
+cmd_arg_stack   = $18           ; 4B stack of argument indexes, pointed at ny num_args. 4 args max for now!
 temp_0          = $1D           ; 1B temp storage
 temp_1          = $1E           ; 1B temp storage
-
+temp_2          = $1F           ; 1B temp storage
+temp_3          = $20           ; 1B temp storage
 
 GRUOS_INPUT_STR = $0200         ; input string buffer, 256B, Shared with wozmon!
 
@@ -83,24 +98,24 @@ RAMBASE = $0200 ; Start of usable RAM, right above SP
 IN         = $0200 ; Input buffer, up to $027F
 
 ;-------------------
-;  Other
+;  Bios configuration variables
 ;-------------------
 
-SLEEP_CNTR = $1004 ; 2B, Counter for Sleep subroutine.
-ACIA_TDRE  = $1006  ; 1B, Copy of ACIA Transmit Ready register, for interrupt handler
-APP_SIZE   = $1008  ; 2B. Size of application in B. LH first.
-APP_CNT    = $100A   ; 2B. Counter tracking how many B if app we've transferred
-DISPLAY_CTRL = $100C  ; 1B. Display control. b0 = echo on display.
-DISPLAY_CHAR_HT = $100D  ; 1B. For text mode, character height in pixels. Used for CR.
-DISPLAY_CHAR_WT = $100E  ; 1B. For text mode, character width in pixels. Used for CR.
-FG_COLOR_R = $100F   ; 1B Foreground color, Red
-FG_COLOR_G = $1010   ; 1B Foreground color, Green
-FG_COLOR_B = $1011   ; 1B Foreground color, Blue
-BG_COLOR_R = $1012   ; 1B Background color, Red
-BG_COLOR_G = $1013   ; 1B Background color, Green
-BG_COLOR_B = $1014   ; 1B Background color, Blue
+SLEEP_CNTR      = $1004     ; 2B, Counter for Sleep subroutine.
+ACIA_TDRE       = $1006     ; 1B, Copy of ACIA Transmit Ready register, for interrupt handler
+APP_SIZE        = $1008     ; 2B. Size of application in B. LH first.
+APP_CNT         = $100A     ; 2B. Counter tracking how many B if app we've transferred
+DISPLAY_CTRL    = $100C     ; 1B. Display control. b0 = echo on display.
+DISPLAY_CHAR_HT = $100D     ; 1B. For text mode, character height in pixels. Used for CR.
+DISPLAY_CHAR_WT = $100E     ; 1B. For text mode, character width in pixels. Used for CR.
+FG_COLOR_R      = $100F     ; 1B Foreground color, Red
+FG_COLOR_G      = $1010     ; 1B Foreground color, Green
+FG_COLOR_B      = $1011     ; 1B Foreground color, Blue
+BG_COLOR_R      = $1012     ; 1B Background color, Red
+BG_COLOR_G      = $1013     ; 1B Background color, Green
+BG_COLOR_B      = $1014     ; 1B Background color, Blue
 
-USER_APP   = $2000   ; Start address for user programms
+USER_APP        = $2000     ; Start address for user programms
 
 ;-------------------------------------------------------------------------
 ;  RA8889 LCD display;
@@ -279,28 +294,44 @@ reset:
     cli                 ; clear interrupt disable
     ldx #$ff
     txs                 ; init SP
+;-------------------------------------------------------------------------
+;  Config VIA
+;-------------------------------------------------------------------------
     lda #$ff
     sta PORTBDDR        ; VIA Port B all outputs
+    lda #$A1            ; dummy for now, this will be VIA2, internal control
+    sta PORTB           ; init port b
     lda #$00
     sta PORTADDR        ; VIA Port A all inputs
     lda #00
     sta AUXCTRL         ; VIA PORT A latching disabled
-    lda #01
+;    lda #01
+    lda #$bb
     sta PORTAPCR        ; VIA PORT A CA1 to pos edge input from keyboard controller
+                        ; CB1 pos edge input from SID
+                        ; CB2 puls handshake
     lda #82
     sta PORTAIER        ; Enable VIA CA1 interrupt for keyboard
-    jsr config_keyboard
-    
+;-------------------------------------------------------------------------
+;  Config PS/2 Keyboard
+;-------------------------------------------------------------------------
+; skip for now, using VIA.PA for sdcard experiment.
+;    jsr config_keyboard ; Config PS2 keyboard
+;-------------------------------------------------------------------------
+;  Config ACIA
+;-------------------------------------------------------------------------
     lda #$00
     sta ACIA_STATUS     ; Reset ACIA
     lda #$1f
     sta ACIA_CTRL       ; 1 stop bit, 8b, Baud rate 19200
     lda #$0b
     sta ACIA_CMD        ; Odd parity, parity disabled, reveiver normal, Tirq and Rirq disabled, DTR not ready
-
     lda #$01
     sta ACIA_TDRE       ; iniit ACIA transmit data register as empty
-
+;-------------------------------------------------------------------------
+;  Config LCD Display
+;-------------------------------------------------------------------------
+reset_display:
     jsr display_init    ; Initialize LCD display
     jsr display_set_text_mode
     jsr display_blinking_cursor_on
@@ -316,22 +347,22 @@ reset:
     sta FG_COLOR_G
     sta FG_COLOR_B
     jsr display_set_fg_color
-    
     lda #$01                         ; Enable display echo
     sta DISPLAY_CTRL
     lda #DEFAULT_CHAR_HEIGHT
     sta DISPLAY_CHAR_HT
 
-
 ; Fall through to start
 
 ;-------------------------------------------------------------------------
-;  Kernel
+;  Main Kernel
 ;-------------------------------------------------------------------------
 
 start:
-    jsr led_pattern         ; Flash LED to shwo we're booting
+    ;jsr led_pattern         ; Flash LED to shwo we're booting
     ; Show boot message on serial (and display)
+    ldx #$02                ; 2 beeps fo rsuccessful startup
+    jsr gruos_beep          ; go beep
     ldx #<startup_message ;
     stx zp_str_ptr
     ldx #>startup_message
@@ -342,22 +373,24 @@ start:
 
 ;-------------------------------------------------------------------------
 ;  Main kernel loop
-;  Scan for serial input and keyboard input.
 ;-------------------------------------------------------------------------
 
 kernel:
-    ldx #<boot_message ;
+    ldx #<boot_message ;    ; Send boot message
     stx zp_str_ptr
     ldx #>boot_message
     stx zp_str_ptr+1
-    jsr snd_str            ; Send boot message to serial
-;    jsr snd_cr             ; newline
-    jmp gruos_start
+    jsr snd_str             ; Send boot message to serial
+    jmp gruos_start         ; Start GRU BIOS!
 
+;-------------------------------------------------------------------------
+; GRU BIOS
+; Simple CLI for now
+;-------------------------------------------------------------------------
 
 gruos_start:
-    jsr snd_cr             ; newline
-    lda #<GRUOS_INPUT_STR       ; set cmd input string pointer, and string index pointers
+    jsr snd_cr                  ; newline
+    lda #<GRUOS_INPUT_STR       ; set up cmd input string pointer, and string index pointers
     sta cmd_input_str
     lda #>GRUOS_INPUT_STR
     sta cmd_input_str + 1
@@ -368,9 +401,9 @@ gruos_start:
 gruos_kernel_loop:
     jsr gruos_get_input_string  ; read input string into  cmd_input_str
 gruos_cmd_parse:                ; I have cmd in input buffer
-    cpy #$00
-    beq gruos_start             ; Empty string, start over
-    lda #$00
+    cpy #$00                    ; Null ptr?
+    beq gruos_start             ; Yes, empty string, start over
+    lda #$00                    ; no, valid input!
     sta (cmd_input_str), Y      ; Zero-terminate input string (replaces CR!)
     ldx #$00                    ; Set cmd index to 0
     ldy #$00                    ; Set character index to 0
@@ -387,27 +420,28 @@ gruos_cmd_parse_char_loop:      ; Parse cmd[X]
     bne gruos_nxt_cmd           ; No character match, check next command
     iny                         ; Character match! Check next character of command
     jmp gruos_cmd_parse_char_loop
-gruos_nxt_cmd:                  ; No match with cmd[x], check next one
+gruos_nxt_cmd:                  ; No match with cmd[x], check next one x+1
     inx                         ; check match with next cmd
     cpx #GRUOS_NUM_CMDS         ; Did we check all cmds?
     beq gruos_syntax_error      ; Yes, command is unknown, syntax error!
-    jmp gruos_cmd_parse_loop    ; No, check next command
-gruos_find_args:
-; find arguments if any. Max of 4 arguments for now!
+    jmp gruos_cmd_parse_loop    ; Not yet, check next command
+gruos_find_args:                ; We have a cmd, now find arguments if any. Max of 4 arguments for now!
     txa                         ; cmd index to A
     pha                         ; save cmd index
 gruos_find_args_loop:
     jsr gruos_eat_spaces        ; eat spaces until possible argument
-    cmp #$01
-    beq gruos_cmd_match_interpret ; No more args found
-; cmd_input_str+Y points to argument
-    ldx num_args
-    tya
-    sta cmd_arg_stack,X           ; store idx of argument
+    cmp #$01                    ; did space eater return 1?
+    beq gruos_cmd_match_interpret ; No more args found, we are done! Go interpret cmd+args
+    ldx num_args                  ; yYes, so there are more arguments. cmd_input_str+Y points to next argument
+    tya                           ; char index to A
+    sta cmd_arg_stack,X           ; store char idx of argument on arg stack
     inc num_args                  ; increment num args
-    jsr gruos_end_of_argument     ; skip to end of argument and zero-terminate
-    jmp gruos_find_args_loop
+    jsr gruos_end_of_argument     ; skip char idx to end of argument and zero-terminate
+    jmp gruos_find_args_loop      ; go find the next arg
 
+;-------------------------------------------------------------------------
+; Syntax error: cmd + arg not parsed
+;-------------------------------------------------------------------------
 gruos_syntax_error:
     jsr snd_cr
     ldx #<gruos_syn_err ;
@@ -417,195 +451,354 @@ gruos_syntax_error:
     jsr snd_str                 ; Send string to serail and display
     jmp gruos_start             ; Start over.
 
-gruos_cmd_match_interpret:
+;-------------------------------------------------------------------------
+; Interpret cmd and possible arguments
+; stack must contain cmd idx
 ; Note we directly tie a cmd index to a command, may have to make this a lookup...
-    jsr snd_cr
+;-------------------------------------------------------------------------
+gruos_cmd_match_interpret:
+    jsr snd_cr              ; newline
     pla                     ; Get cmd index from stack
     cmp #$00                ; idx 0?
     beq jump_wozmon         ; yes, start wozmon
     cmp #$01                ; idx 1?
-    beq jump_load_app       ; yes, start wozmon
+    beq jump_load_app       ; yes, load app
     cmp #$02                ; idx 2?
-    beq jump_exe_app        ; yes, start wozmon
-    cmp #$03                ; idx 2?
-    beq jump_list_app        ; yes, start wozmon
-    cmp #$04                ; idx 2?
-    beq jump_set_color        ; yes, start wozmon
-    cmp #$05                ; idx 2?
-    beq jump_poke        ; yes, start wozmon
-    cmp #$06                ; idx 2?
-    beq jump_peek        ; yes, start wozmon
-    ldx #<gruos_kernel_err     ; Should never happen! Index should exist...
+    beq jump_exe_app        ; yes, execute app
+    cmp #$03                ; idx 3?
+    beq jump_list_app       ; yes, list app hex
+    cmp #$04                ; idx 4?
+    beq jump_set_color      ; yes, set colors
+    cmp #$05                ; idx 5?
+    beq jump_poke           ; yes, poke into RAM
+    cmp #$06                ; idx 6?
+    beq jump_peek           ; yes, peek into RAM
+    cmp #$07                ; idx 7?
+    beq jump_sid            ; yes, access SID
+    cmp #$08
+    beq jump_reset          ; yes, sw reset
+    ldx #<gruos_kernel_err  ; Should never happen! Index should exist...
     stx zp_str_ptr
     ldx #>gruos_kernel_err
     stx zp_str_ptr+1
     jsr snd_str             ; Send string to serail and display
     jmp gruos_kernel_loop   ; Try again...
 
-jump_wozmon:                ; Absolute jump because brach is out of range.
+;-------------------------------------------------------------------------
+; Actual cmd execution, separate because of branch target ranges...
+;-------------------------------------------------------------------------
+;-------------------------------------------------------------------------
+; wozmon
+;-------------------------------------------------------------------------
+jump_wozmon:
     jmp wozmon
-
-jump_load_app:              ; Absolute jump because brach is out of range.
-    ; We take 1 arg for now: source of app.
-    ; 0: Serial
-    ; 1: sdcard (noy supported yet)
-    lda cmd_arg_stack   ; first argument index
-    sta cmd_arg_idx
-    jsr gruos_str_to_hex    ;
-    lda arg_lo
-    cmp #$00                ; serial?
-    beq jump_load_app_serial
-    jsr snd_cr
-    ldx #<gruos_load_err ;
+;-------------------------------------------------------------------------
+; load <device>
+; 0: Serial
+; 1: sdcard (noy supported yet)
+;-------------------------------------------------------------------------
+jump_load_app:
+    lda cmd_arg_stack           ; load first argument index
+    sta cmd_arg_idx             ; store it in zero-page
+    jsr gruos_str_to_hex        ; Convert string to hex
+    lda arg_lo                  ; Load result
+    cmp #$00                    ; Is device serial?
+    beq jump_load_app_serial    ; Yes, load app from serial!
+    jsr snd_cr                  ; Nope, device not available, send error
+    ldx #<gruos_load_err        ; Load error message string
     stx zp_str_ptr
     ldx #>gruos_load_err
     stx zp_str_ptr+1
     jsr snd_str                 ; Send string to serail and display
     jmp gruos_start             ; Start over
+;-------------------------------------------------------------------------
+; Load app from serial
+;-------------------------------------------------------------------------
 jump_load_app_serial:
     jmp load_app
-
-jump_list_app:              ; Absolute jump because brach is out of range.
+;-------------------------------------------------------------------------
+; list
+;
+; Just dump hex bytes of loaded app, will depricate this, just for validation.
+;-------------------------------------------------------------------------
+jump_list_app:
     jmp list_app
-
+;-------------------------------------------------------------------------
+; run
+;
+; Run app starting at $USER_APP
+;-------------------------------------------------------------------------
 jump_exe_app:               ; Absolute jump because brach is out of range.
     jmp exe_app
-
 jump_set_color:
     jmp set_color
+jump_sid:
+    jmp gruos_sid
+jump_reset:
+    jmp gruos_rst_disp
+;-------------------------------------------------------------------------
+; peek <addr>
+;
+; Read byte at 16b <addr>, can be 0x<hex> or <decimal>
+;-------------------------------------------------------------------------
 jump_peek:
-    ; first arg is 16b address
-    lda cmd_arg_stack   ; first argument index
-    sta cmd_arg_idx
-    jsr gruos_str_to_hex    ;
-    lda arg_hi
-    sta temp_1
-    jsr PRBYTE
-    lda arg_lo
-    sta temp_0
-    jsr PRBYTE
-    lda #ascii_lt
-    jsr send_char
+    lda cmd_arg_stack       ; Load first argument (address) index
+    sta cmd_arg_idx         ; Store in zero-page
+    jsr gruos_str_to_hex    ; Convert address to hex
+    lda arg_hi              ; load Hi byte of 16b address
+    sta temp_1              ; store in temp_1
+    jsr PRBYTE              ; echo to display
+    lda arg_lo              ; load Lo byte of 16b address
+    sta temp_0              ; store in temp_0
+    jsr PRBYTE              ; echo to display
+    lda #ascii_lt           ; load separator: ascii ">"
+    jsr send_char           ; echo it
     ldy #$00
-    lda (temp_0), Y
-    jsr PRBYTE
-    jmp gruos_start
-
+    lda (temp_0), Y         ; read memory at zero-page address {temp_1, temp0}
+    jsr PRBYTE              ; echo it
+    jmp gruos_start         ; done, go back to prompt
+;-------------------------------------------------------------------------
+; poke <addr> <data>
+;
+; Write 8b <data> at 16b <addr>, both can be 0x<hex> or <decimal>
+;-------------------------------------------------------------------------
 jump_poke:
-    ; first arg is 16b address
-    lda cmd_arg_stack   ; first argument index
-    sta cmd_arg_idx
-    jsr gruos_str_to_hex    ;
-    lda arg_hi
-    sta temp_1
-    jsr PRBYTE
-    lda arg_lo
-    sta temp_0
-    jsr PRBYTE
-    lda #ascii_lt
-    jsr send_char
-    ; second arg is 8b value to store
-    lda cmd_arg_stack + 1   ; first argument index
-    sta cmd_arg_idx
-    jsr gruos_str_to_hex    ;
-    lda arg_lo
-    jsr PRBYTE
-    lda arg_lo
+    lda cmd_arg_stack       ; Load first argument (address) index
+    sta cmd_arg_idx         ; Store in zero-page
+    jsr gruos_str_to_hex    ; Convert address to hex
+    lda arg_hi              ; load Hi byte of 16b address
+    sta temp_1              ; store in temp_1
+    jsr PRBYTE              ; echo to display
+    lda arg_lo              ; load Lo byte of 16b address
+    sta temp_0              ; store in temp_0
+    jsr PRBYTE              ; echo to display
+    lda #ascii_lt           ; load separator: ascii ">"
+    jsr send_char           ; echo it
+    lda cmd_arg_stack + 1   ; second arg is 8b value to store
+    sta cmd_arg_idx         ; Store in zero-page
+    jsr gruos_str_to_hex    ; Convert data to hex
+    lda arg_lo              ; load 8b data
+    jsr PRBYTE              ; echo it
+    lda arg_lo              ; load 8b data again
     ldy #$00
-    sta (temp_0), Y
-    jmp gruos_start
-
-
+    sta (temp_0), Y         ; Store data at zero-page address {temp_1, temp0}
+    jmp gruos_start         ; done, go back to prompt
+;-------------------------------------------------------------------------
+; set_color <fg> <bg>
+;
+; Set foregraound color to <fg> and background color to <bg>
+; Supported colors:
+; 0: black
+; 1: white
+; 2: red
+; 3: green
+; 4: blue
+;-------------------------------------------------------------------------
 set_color:
-    ; first arg is FG color
-    lda cmd_arg_stack   ; first argument index
-    sta cmd_arg_idx
-    jsr gruos_str_to_hex    ;
-    ldy arg_lo
-    lda gruos_color_table_R, Y
-    sta FG_COLOR_R
-    lda gruos_color_table_G, Y
-    sta FG_COLOR_G
-    lda gruos_color_table_B, Y
-    sta FG_COLOR_B
-    ; second arg is BG color
-    lda cmd_arg_stack + 1   ; first argument index
-    sta cmd_arg_idx
-    jsr gruos_str_to_hex    ;
-    ldy arg_lo
-    lda gruos_color_table_R, Y
-    sta BG_COLOR_R
-    lda gruos_color_table_G, Y
-    sta BG_COLOR_G
-    lda gruos_color_table_B, Y
-    sta BG_COLOR_B
-    jsr clear_screen   ; will set fg and bg colors.
-    jmp gruos_start
+    lda cmd_arg_stack           ; Load first arg index from stack: fg color
+    sta cmd_arg_idx             ; Store arg index to zero-page
+    jsr gruos_str_to_hex        ; Convert fg color arg to hex
+    ldy arg_lo                  ; load hex fg color into Y
+    lda gruos_color_table_R, Y  ; Load Red RGB value for fg color
+    sta FG_COLOR_R              ; Store in FG color variable
+    lda gruos_color_table_G, Y  ; Load Green RGB value for fg color
+    sta FG_COLOR_G              ; Store in FG color variable
+    lda gruos_color_table_B, Y  ; Load Blue RGB value for fg color
+    sta FG_COLOR_B              ; Store in FG color variable
+    lda cmd_arg_stack + 1       ; Load second arg index from stack: bg color
+    sta cmd_arg_idx             ; Store arg index to zero-page
+    jsr gruos_str_to_hex        ; Convert bg color arg to hex
+    ldy arg_lo                  ; load hex bg color into Y
+    lda gruos_color_table_R, Y  ; Load Red RGB value for bg color
+    sta BG_COLOR_R              ; Store in BG color variable
+    lda gruos_color_table_G, Y  ; Load Green RGB value for bg color
+    sta BG_COLOR_G              ; Store in BG color variable
+    lda gruos_color_table_B, Y  ; Load Blue RGB value for bg color
+    sta BG_COLOR_B              ; Store in BG color variable
+    jsr clear_screen            ; Clear screen and set fg and bg colors.
+    jmp gruos_start             ; All done...
 
 
+
+
+gruos_rst_disp:
+    lda PORTB
+    and #CLEAR_BIT_0
+    sta PORTB
+    ldy #$FF         ; delay FFF, lsb
+    sty SLEEP_CNTR
+    ldy #$0F         ; delay FFF, msb
+    sty SLEEP_CNTR + 1
+    jsr sleep
+    ora #SET_BIT_0
+    sta PORTB
+    ldy #$FF         ; delay FFF, lsb
+    sty SLEEP_CNTR
+    ldy #$FF         ; delay FFF, msb
+    sty SLEEP_CNTR + 1
+    jsr sleep
+    jmp reset_display
+
+;-------------------------------------------------------------------------
+; gruos_sid <cmd> <data>
+;
+; cmd 0: address
+; cmd 1: read byte
+; cmd 2: write byte
+;
+; gruos_sid 0 0
+; gruos_sid 1 0
+; gruos_sid 2
+;
+;; @@@ fix: no longer access on 6502 bus, using VIA, so jus send address as first
+; byte and then data
+;-------------------------------------------------------------------------
+gruos_sid:
+    lda #$FF
+    sta PORTADDR        ; VIA Port A all outputs
+    lda cmd_arg_stack           ; Load first arg index from stack: SID data
+    sta cmd_arg_idx             ; Store arg index to zero-page
+    jsr gruos_str_to_hex        ; Convert data arg to hex
+    lda arg_lo                  ; load hex data into A
+    jsr PRBYTE
+    lda arg_lo                  ; load hex data into A
+    cmp #$00                    ; cmd 0?
+    beq gruos_sid_addr          ; yes, jump to
+    cmp #$01                    ; cmd 1?
+    beq gruos_sid_receive          ; yes, jump to
+    ; send SID->VIA
+    lda #$02                  ; cmd2: write single byte
+    sta PORTA                   ; send to VIA PORTA
+    jsr gruos_sid_wait_ack ; wait until sid receved
+    lda #$00
+    sta PORTADDR        ; VIA Port A all inputs
+    jsr gruos_sid_wait_ack ; wait until sid receved
+    lda PORTA
+    jsr PRBYTE
+    lda #$FF
+    sta PORTADDR        ; VIA Port A all outputs
+    jmp gruos_start             ; All done...
+
+gruos_sid_addr:
+    lda #$00                  ; cmd0: set address
+    sta PORTA                   ; send to VIA PORTA
+    jsr gruos_sid_wait_ack ; wait until sid receved
+    lda cmd_arg_stack + 1       ; Load second arg index from stack: SID addr
+    sta cmd_arg_idx             ; Store arg index to zero-page
+    jsr gruos_str_to_hex        ; Convert addr arg to hex
+    lda arg_lo                  ; load hex addr into A
+    jsr PRBYTE
+    lda arg_lo                  ; load hex addr into A
+    sta PORTA
+    jsr gruos_sid_wait_ack ; wait until sid receved
+    jmp gruos_start             ; All done...
+
+gruos_sid_receive:
+;   VIA -> SID
+    lda #$01                  ; cmd1: set send data to
+    sta PORTA                   ; send to VIA PORTA
+    jsr gruos_sid_wait_ack ; wait until sid receved
+    lda cmd_arg_stack + 1       ; Load second arg index from stack: SID addr
+    sta cmd_arg_idx             ; Store arg index to zero-page
+    jsr gruos_str_to_hex        ; Convert addr arg to hex
+    lda arg_lo                  ; load hex addr into A
+    jsr PRBYTE
+    lda arg_lo                  ; load hex addr into A
+    sta PORTA
+    jsr gruos_sid_wait_ack ; wait until sid receved
+    jmp gruos_start             ; All done...
+
+
+gruos_sid_wait_ack:
+    lda PORTAIFR
+    and #$02        ; bit 1 CA1
+    beq gruos_sid_wait_ack          ; zero, not ack yet
+    rts
+
+
+;-------------------------------------------------------------------------
+; Read input string from keyboard or serial into input buffer
+; Leaves non-terminated string in memory at cmd_input_str, Y
+; points to idx after last character of string
+;-------------------------------------------------------------------------
 gruos_get_input_string:
     jsr get_char                ; read input
     jsr send_char               ; echo on display/serial
     cmp #CR                     ; Is CR?
     beq gruos_get_input_string_done          ; Yes, parse command
-    sta (cmd_input_str), Y      ; Store char in input buffer
-    iny                         ; Next character
-    jmp gruos_get_input_string
-gruos_get_input_string_done:
+    sta (cmd_input_str), Y      ; No, store char in input buffer
+    iny                         ; Advance index to Next character
+    jmp gruos_get_input_string  ; read next char
+gruos_get_input_string_done:    ; CR read, string was read
     rts
 
-
+;-------------------------------------------------------------------------
+; Convert ascii string representing an argument to hex value
+; First char of 0-terminated string is pointed at by (cmd_input_str) + cmd_arg_idx
+; 16b hex value is returned in {arg_hi, arg_lo}
+; String can be "0x"<hex> (upper/lower case) and <dec>
+; This destroys temp_0 and temp_1
+;-------------------------------------------------------------------------
 gruos_str_to_hex:
     lda #$00
     sta arg_lo                   ; reset hex value
     sta arg_hi
     ldy cmd_arg_idx              ; load Y with index to first char of argument
-    lda (cmd_input_str), Y     ; load first char
+    lda (cmd_input_str), Y       ; load first char
     cmp #'0'
-    bne gruos_dec_str_to_hex     ; does not start with 0
-    iny                          ; next char
-    lda (cmd_input_str), Y     ; load first char
+    bne gruos_dec_str_to_hex     ; does it start with 0?
+    iny                          ; Yes, could be '0' of '0x' of hex, check next char
+    lda (cmd_input_str), Y       ; load next char
     cmp #'x'
-    beq gruos_hex_str_to_hex     ; starts with 0x
-    ldy cmd_arg_idx              ; is decimal, reset Y
-
-gruos_dec_str_to_hex:            ; decimal
-    lda (cmd_input_str), Y     ; load first char
-    beq gruos_str_to_hex_done    ; zero termination, done!
-    sec                          ; set carry for subtraction
+    beq gruos_hex_str_to_hex     ; is it 'x'?
+    ldy cmd_arg_idx              ; No, so the previous 0 was first digit of decimal. Reset Y to point back at first char
+;-------------------------------------------------------------------------
+; Decimal string to hex.
+;-------------------------------------------------------------------------
+gruos_dec_str_to_hex:
+    lda (cmd_input_str), Y       ; load first char
+    beq gruos_str_to_hex_done    ; Is it 0-terminated?
+    sec                          ; No, we have real decimal digit, set carry for subtraction
     sbc #'0'                     ; convert dec ascii to hex
-    pha                          ; save, first do current value x10
+    pha                          ; save current hex digit, first do current value x10
     jsr gruos_mult_10            ; multiply arg_lo/hi with 10
     pla                          ; pull current digit
-    clc                          ; clear carry befor eadd
+    clc                          ; clear carry before add
     adc arg_lo                   ; add to low byte of current arg
     sta arg_lo                   ; store arg_lo
     bcc gruos_dec_str_to_hex_nc  ; was there a carry?
     inc arg_hi                   ; yes so increment arg_hi
-gruos_dec_str_to_hex_nc:
-    iny                          ; next is_digit_hex
-    jmp gruos_dec_str_to_hex     ; process next digit
-
-gruos_hex_str_to_hex:            ; hex
-    iny                          ; now pointing to after '0x'
+gruos_dec_str_to_hex_nc:         ; no carry
+    iny                          ; move to next decimal digit
+    jmp gruos_dec_str_to_hex     ; process next decimal digit
+;-------------------------------------------------------------------------
+; Hex string to hex.
+;-------------------------------------------------------------------------
+gruos_hex_str_to_hex:
+    iny                          ; Move char index one over, now pointing to first digit after '0x'
 gruos_hex_str_to_hex_loop:
-    lda (cmd_input_str), Y         ; load first char
-    beq gruos_str_to_hex_done    ; zero termination, done
-    jsr gruos_ascii_to_hex
-    pha
-    jsr gruos_shift_left_4
-    pla
-    clc
-    adc arg_lo
-    sta arg_lo
-    lda #$00
-    adc arg_hi
-    sta arg_hi
-    iny
-    jmp gruos_hex_str_to_hex_loop
-gruos_str_to_hex_done: ; arg_lo/hi contains 16b hex value of string
+    lda (cmd_input_str), Y       ; load first char
+    beq gruos_str_to_hex_done    ; Is it zero-terminated?
+    jsr gruos_ascii_to_hex       ; No, we have a real hex digit, convert it, result in A
+    pha                          ; save current hex digit, first
+    jsr gruos_shift_left_4       ; multiply 16b value in arg_hi/lo with x16, by shifting left 4 bits.
+    pla                          ; Restore our hex digit
+    clc                          ; clear carry for add
+    adc arg_lo                   ; add 4b hex vaue to arg_lo
+    sta arg_lo                   ; store it
+    lda #$00                     ; Set A to zero, to make sure we can add carry (if any) to arg_hi
+    adc arg_hi                   ; Add carry from arg_lo to arg_hi
+    sta arg_hi                   ; Store arg_hi
+    iny                          ; Next hex digit
+    jmp gruos_hex_str_to_hex_loop ; process next hex digit
+gruos_str_to_hex_done:            ; {arg_hi, arg_lo} contains 16b hex value of string
     rts
 
+;-------------------------------------------------------------------------
+; Convert ascii code in A into hex number.
+; Returns hex number in A
+; Hex ascii codes can be [A-Fa-f0-9]
+;-------------------------------------------------------------------------
 gruos_ascii_to_hex:
     cmp #'A'
     bcc is_digit_hex
@@ -624,30 +817,37 @@ is_digit_hex:
     sbc #'0'
     rts
 
-; multiply 16b value in arg_lo/hi by 10
+;-------------------------------------------------------------------------
+; Multiply 16b value in arg_lo/hi by 10
+; We do x*10 = (4*x + x)*2 to be able to express it in shifts and adds.
+;-------------------------------------------------------------------------
 gruos_mult_10:
-    lda arg_lo                   ; save arg_lo in temp memory
+    lda arg_lo                   ; save original arg_lo in temp memory
     sta temp_0
-    lda arg_hi                   ; save arg_lo in temp memory
+    lda arg_hi                   ; save original arg_lo in temp memory
     sta temp_1
 ; left shift arg_l/hi twice to get x4
-    asl arg_lo
+    asl arg_lo                   ; First left shift
     rol arg_hi
-    asl arg_lo
+    asl arg_lo                   ; Second left shift
     rol arg_hi
-; add original value to get x5
-    clc                           ; clear carry for add
-    lda arg_lo
-    adc temp_0
-    sta arg_lo
-    lda arg_hi
-    adc temp_1
-    sta arg_hi
-; shift lef once to get x10
+; Now add original value to get x5
+    clc                          ; clear carry for add
+    lda arg_lo                   ; load arg_lo
+    adc temp_0                   ; add original arg_lo saved in temp
+    sta arg_lo                   ; store result
+    lda arg_hi                   ; load arg_hi
+    adc temp_1                   ; add original arg_lo saved in temp, with carry from arg_lo
+    sta arg_hi                   ; store result
+; Finally shift left once to get x10
     asl arg_lo
     rol arg_hi
     rts
 
+;-------------------------------------------------------------------------
+; Multiply 16b value in arg_lo/hi by 16
+; We shift left 4 times.
+;-------------------------------------------------------------------------
 gruos_shift_left_4:
     asl arg_lo
     rol arg_hi
@@ -659,39 +859,46 @@ gruos_shift_left_4:
     rol arg_hi
     rts
 
+;-------------------------------------------------------------------------
+; Eat all the spaces before an actual argument, thsi allows us to type "cmd arg" and "cmd    arg"
 ; cmd_tmp_str+Y points to 0-terminated string
 ; Advance Y until next non-space character is found
-; A = 1 if no argument found
-gruos_eat_space:
-    iny
+; Returns A = 1 if no argument found
+; Returns A = 0 if Y was successfully advanced to first character of next argument
+;-------------------------------------------------------------------------
+gruos_eat_space:                    ; We found a space. We have at least one between cmd and arg
+    iny                             ; Move to next char, eat space!
 gruos_eat_spaces:
-    lda (cmd_input_str), Y        ; Load character[Y] of cmd[X] string
-    cmp #$20
-    beq gruos_eat_space
-    cmp #$00                    ; 0 termination?
-    beq gruos_no_more_args
-    lda #$00                    ; argument found
+    lda (cmd_input_str), Y          ; Load character[Y]
+    cmp #SP
+    beq gruos_eat_space             ; Is it a space?
+    cmp #$00                        ; No
+    beq gruos_no_more_args          ; Is it a zero-termination?
+    lda #$00                        ; Again no, so we found first char of argument, load success code in A
     rts
-gruos_no_more_args:
-    lda #$01                    ; no argument found
+gruos_no_more_args:                 ; We found zero-termination
+    lda #$01                        ; Load failure code in A
     rts
 
-; cmd_tmp_str+Y points to first character of argument
+;-------------------------------------------------------------------------
+; Move argument char pointer Y to the first space after the current argument
+; cmd_tmp_str+Y points to first character of current argument
 ; Advance Y until space or 0-terminated character is found
 ; if space, we zero-terminate it
+;-------------------------------------------------------------------------
 gruos_end_of_argument:
-    iny
-    lda (cmd_input_str), Y        ; Load character[Y] of cmd[X] string
-    cmp #$20                    ; space ?
-    beq gruos_found_end_of_argument_0t
-    cmp #$00                    ; 0 termination?
-    beq gruos_found_end_of_argument
-    jmp gruos_end_of_argument   ; end of argument not yet found
-gruos_found_end_of_argument_0t:
-    lda #$00                    ; zero-terminate
-    sta (cmd_input_str), Y
-    iny                         ; Y points to first chr of next argument if any
-gruos_found_end_of_argument:    ; already at 0 termination.
+    iny                             ; Advance Y to next char
+    lda (cmd_input_str), Y          ; Load character[Y]
+    cmp #$SP                        ; Compare with space
+    beq gruos_found_end_of_argument_0t  ; Space?
+    cmp #$00                            ; No. Load A with zero termination
+    beq gruos_found_end_of_argument     ; Is char a zero termination?
+    jmp gruos_end_of_argument           ; No, end of argument not yet found, continue scanning
+gruos_found_end_of_argument_0t:         ; Found space
+    lda #$00                            ; load zero-termination
+    sta (cmd_input_str), Y              ; zero-terminate current arg
+    iny                                 ; Y points to first char of next argument if any
+gruos_found_end_of_argument:            ; already at 0 termination.
     rts
 
 gruos_snd_prompt:
@@ -717,6 +924,40 @@ no_keyboard:
     stx zp_str_ptr+1
     jsr snd_str        ; Send Startup message to serial
     jsr snd_cr         ; newline
+    rts
+
+gruos_beep:
+    pha              ; save A
+    tya              ; Y - > A
+    pha              ; save Y
+gruos_beep_loop:
+    lda AUXCTRL
+    ora SET_BIT_7   ; T1 control continuous interrupts, PB7 square wave output
+    ora SET_BIT_6
+    sta AUXCTRL
+    lda #$FF        ; low order timer preset, nothng happens yet
+    sta VIAT1L
+    lda #$00        ; high order timer preset, writing kicks off timer
+    sta VIAT1H      ; load timer registers, start timer
+    ldy #$FF         ; delay FFF, lsb
+    sty SLEEP_CNTR
+    ldy #$0F         ; delay FFF, msb
+    sty SLEEP_CNTR + 1
+    jsr sleep        ; delay
+    lda AUXCTRL
+    and CLEAR_BIT_7   ; T1 control continuous interrupts, PB7 square wave output
+    and CLEAR_BIT_6
+    sta AUXCTRL
+    ldy #$FF         ; delay FFF, lsb
+    sty SLEEP_CNTR
+    ldy #$0F         ; delay FFF, msb
+    sty SLEEP_CNTR + 1
+    jsr sleep        ; delay
+    dex
+    bne gruos_beep_loop
+    pla              ; restore Y
+    tay              ; A -> Y
+    pla              ; restore A
     rts
 
 
@@ -947,9 +1188,10 @@ get_char:
     lda ACIA_STATUS        ; Check status
     and #$08               ; Receive ready set?
     bne load_acia_char     ; Yes! Read from ACIA
-    lda PORTAIFR           ; Check VIA status for CA1 interrupt (polling)
-    and #$02               ; Receive ready set?
-    bne load_kb_char       ; Yes! Read from keyboard
+; skip kbd check, using VIA.PA for sdcard expriment
+;    lda PORTAIFR           ; Check VIA status for CA1 interrupt (polling)
+;    and #$02               ; CA1 Receive ready set? @@@ OR to ignore SID on CB1?
+;    bne load_kb_char       ; Yes! Read from keyboard
     jmp get_char           ; Neither, check again (blocking!!)
 load_acia_char:
     lda ACIA_DATA          ; We have a char, read from ACIA
@@ -1069,7 +1311,7 @@ sleep_done:
 ;-------------------------------------------------------------------------
 
 led_out:
-    sta PORTB
+;    sta PORTB
     rts
 
 ;-------------------------------------------------------------------------
@@ -2098,7 +2340,7 @@ acia_irq:
 ;  Messages, Errors
 ;-------------------------------------------------------------------------
 
-startup_message: .asciiz "GRU-10 Computer, v0.129"
+startup_message: .asciiz "GRU-10 Computer, v0.133"
 boot_message: .asciiz "GRU BIOS v0.1, ready..."
 file_loaded_message: .asciiz "File loaded, size (B): "
 wozmon_message: .asciiz "Starting WozMon"
@@ -2117,14 +2359,16 @@ gruos_cmd_list:      .asciiz "list"                  ; 3
 gruos_cmd_set_color:      .asciiz "set_color"                  ; 4
 gruos_cmd_poke:      .asciiz "poke"                  ; 5
 gruos_cmd_peek:      .asciiz "peek"                  ; 6
+gruos_cmd_sid:      .asciiz "sid"                  ; 7
+gruos_cmd_reset:      .asciiz "reset"                  ; 8
 
 gruos_load_err:      .asciiz "Loads not support from that device"
 gruos_syn_err:      .asciiz "Syntax Error"
 gruos_kernel_err:   .asciiz "Kernel Error"
 
-GRUOS_NUM_CMDS = $07
-gruos_cmd_table_lo: .byte<gruos_cmd_wozmon, <gruos_cmd_load, <gruos_cmd_run, <gruos_cmd_list, <gruos_cmd_set_color, <gruos_cmd_poke, <gruos_cmd_peek
-gruos_cmd_table_hi: .byte>gruos_cmd_wozmon, >gruos_cmd_load, >gruos_cmd_run, >gruos_cmd_list, >gruos_cmd_set_color, >gruos_cmd_poke, >gruos_cmd_peek
+GRUOS_NUM_CMDS = $09
+gruos_cmd_table_lo: .byte<gruos_cmd_wozmon, <gruos_cmd_load, <gruos_cmd_run, <gruos_cmd_list, <gruos_cmd_set_color, <gruos_cmd_poke, <gruos_cmd_peek, <gruos_cmd_sid, <gruos_cmd_reset
+gruos_cmd_table_hi: .byte>gruos_cmd_wozmon, >gruos_cmd_load, >gruos_cmd_run, >gruos_cmd_list, >gruos_cmd_set_color, >gruos_cmd_poke, >gruos_cmd_peek, >gruos_cmd_sid, >gruos_cmd_reset
 
 
 ; color table
